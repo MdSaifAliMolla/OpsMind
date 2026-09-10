@@ -1,0 +1,33 @@
+{
+  "title": "OpsMind agent",
+  "uid": "opsmind-agent",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Investigations by severity",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "sum by (severity) (opsmind_incidents_total)" }]
+    },
+    {
+      "title": "Mean RCA confidence",
+      "type": "gauge",
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "opsmind_rca_confidence_avg" }]
+    },
+    {
+      "title": "Failed investigations",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "opsmind_incidents_failed_total" }]
+    },
+    {
+      "title": "Demo checkout error rate",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "rate(demo_checkouts_total{status=\"error\"}[1m]) / rate(demo_checkouts_total[1m])"
+      }]
+    }
+  ]
+}

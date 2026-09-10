@@ -1,0 +1,20 @@
+groups:
+  - name: opsmind-agent
+    interval: 30s
+    rules:
+      - alert: OpsMindFailures
+        expr: opsmind_incidents_failed_total > 0
+        for: 1m
+        labels: { severity: page, service: opsmind-api }
+        annotations:
+          summary: "OpsMind investigations are failing"
+
+  - name: demo-service
+    interval: 15s
+    rules:
+      - alert: DemoHighErrors
+        expr: rate(demo_checkouts_total{status="error"}[1m]) / rate(demo_checkouts_total[1m]) > 0.1
+        for: 30s
+        labels: { severity: page, service: demo-checkout }
+        annotations:
+          summary: "demo-checkout error rate above 10%"

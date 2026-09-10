@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpsMind</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1020px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; } h3 { margin: 0.4rem 0; } h4 { margin: 1rem 0 0.3rem; }
+  .row { display: flex; gap: 1rem; align-items: flex-start; }
+  .col { flex: 1; min-width: 0; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  .muted { color: #666; font-size: 0.85rem; }
+  button { padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid #333; background: #111; color: #fff; cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.ghost { background: #fff; color: #111; }
+  pre { background: #f6f6f6; padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.8rem; white-space: pre-wrap; }
+  select { padding: 0.4rem; border: 1px solid #ccc; border-radius: 6px; }
+  .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; }
+  .p1 { background: #fde2e2; } .p2 { background: #fef3c7; } .low { background: #dcfce7; } .med { background: #fef3c7; }
+  .steps { display: flex; flex-wrap: wrap; gap: 0; margin: 0.6rem 0; }
+  .step { padding: 0.3rem 0.6rem; border: 1px solid #ccc; font-size: 0.75rem; background: #fafafa; }
+  .step:first-child { border-radius: 6px 0 0 6px; } .step:last-child { border-radius: 0 6px 6px 0; }
+  .step.done { background: #dcfce7; border-color: #86c79a; }
+  .step.wait { background: #fef3c7; border-color: #d9b53c; }
+  .step + .step { border-left: none; }
+  .bar { height: 8px; border-radius: 4px; background: #eee; overflow: hidden; max-width: 260px; }
+  .bar > div { height: 100%; background: #111; }
+  .hyp { border-left: 3px solid #ccc; padding-left: 0.6rem; margin-bottom: 0.6rem; }
+  .hyp.top { border-color: #111; }
+</style>
+</head>
+<body>
+<h1>OpsMind — incidents</h1>
+<p class="muted">Triage &rarr; investigate &rarr; propose fix. Medium/high risk actions wait for approval here.</p>
+
+<div class="card">
+  <h3>Fire a test incident</h3>
+  <select id="incidentPick"></select>
+  <button id="fireBtn">Run investigation</button>
+  <button id="refreshBtn" class="ghost">Refresh</button>
+  <span id="fireStatus" class="muted"></span>
+</div>
+
+<div class="row">
+  <div class="col"><div id="list"></div></div>
+  <div class="col"><div id="detail"><p class="muted">Pick an incident to see the agent's trace, hypotheses and the proposed fix.</p></div></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/real/
+data/incidents/
+mlruns/
+mlartifacts/
+.env

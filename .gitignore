@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
+data/incidents/incident_*
+data/real/
+app/rag/store.json
+app/evaluation/results.json
+mlruns/
+mlartifacts/
+*.log
+.DS_Store
+# local-only interview prep notes, never commit
+architecture.md

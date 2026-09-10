@@ -1,0 +1,7 @@
+# Lint contract for CI: real bugs (pyflakes), obvious errors (pycodestyle),
+# import order and pyupgrade. Blind-except is intentional here — every
+# external dependency (qdrant, postgres, k8s, llm) degrades to a local
+# fallback, so BLE is deliberately off.
+[lint]
+select = ["E", "F", "UP", "I"]
+ignore = ["E501"]

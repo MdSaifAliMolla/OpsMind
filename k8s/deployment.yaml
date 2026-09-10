@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsmind-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: opsmind-api }
+  template:
+    metadata:
+      labels: { app: opsmind-api }
+    spec:
+      containers:
+        - name: api
+          image: opsmind-api:latest
+          ports: [{ containerPort: 4000 }]
+          env:
+            - name: DATABASE_URL
+              value: postgres://opsmind:opsmind@postgres:5432/opsmind
+            - name: QDRANT_URL
+              value: http://qdrant:6333
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsmind-api
+spec:
+  selector: { app: opsmind-api }
+  ports: [{ port: 4000, targetPort: 4000 }]
+---
+# scales the agent itself on load: incident bursts spawn more replicas
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: opsmind-api
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: opsmind-api }
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
