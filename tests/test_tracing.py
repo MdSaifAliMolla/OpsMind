@@ -92,9 +92,7 @@ def test_traced_node_records_error(spans):
 
 
 def test_invoke_tracked_emits_chat_span(spans, monkeypatch):
-    monkeypatch.setenv("OPSMIND_LLM_PROVIDER", "openai_compat")
-    monkeypatch.setenv("OPSMIND_LLM_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("OPSMIND_LLM_MODEL", "llama3.1")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.delenv("OPSMIND_TRACE_CONTENT", raising=False)
     from app.agents import llm_provider as p
     p.reset_provider_cache()
@@ -111,7 +109,7 @@ def test_invoke_tracked_emits_chat_span(spans, monkeypatch):
     monkeypatch.setattr(p, "get_chat_model", lambda: _FakeChat())
     from app.agents import llm as llm_mod
     llm_mod.invoke_tracked("hi", where="judge")
-    attrs = _attrs(spans, "chat llama3.1")
+    attrs = _attrs(spans, "chat gemini-3.5-flash-lite")
     assert attrs is not None
     assert attrs["opsmind.node"] == "judge"
     assert attrs["gen_ai.usage.input_tokens"] == 7

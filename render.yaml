@@ -11,8 +11,6 @@ services:
         value: "1"
       - key: OPSMIND_CHECKPOINTER
         value: memory
-      - key: OPSMIND_MODE
-        value: single
       - key: OPSMIND_RATE_LIMIT_PER_MIN
         value: "6"
       - key: OPSMIND_APPROVAL_TTL_MIN

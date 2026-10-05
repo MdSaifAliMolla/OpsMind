@@ -23,6 +23,5 @@ primary_region = "ams"
 [env]
   HF_HUB_OFFLINE = "1"
   OPSMIND_CHECKPOINTER = "memory"
-  OPSMIND_MODE = "single"
   OPSMIND_RATE_LIMIT_PER_MIN = "6"
   OPSMIND_APPROVAL_TTL_MIN = "30"

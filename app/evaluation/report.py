@@ -98,8 +98,6 @@ def render(results_path: str) -> str:
     lines += ["",
               "## Ablation / providers / real data",
               "",
-              "- Multi-agent: `docs/eval/ABLATION.md` (`py -m app.evaluation.ablate_modes --n 12`).",
-              "- Providers: `docs/eval/PROVIDERS.md` (Gemini vs Ollama/vLLM/AgentGate).",
               "- Real telemetry: `py -m app.evaluation.run_real` — report-only, family-keyword "
               "scoring; publish numbers with windowing limits attached.",
               ""]
@@ -107,7 +105,7 @@ def render(results_path: str) -> str:
 
 
 def main(results="app/evaluation/results.json", out="docs/eval/REPORT.md"):
-    md = render(os.path.join(os.getcwd(), results))
+    md = render(results)
     out_path = os.path.join(os.getcwd(), out)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:

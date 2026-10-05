@@ -61,13 +61,12 @@ def _estimate_tokens(text: str) -> int:
 def invoke_tracked(messages, *, where: str = "agent"):
     import time
 
-    from app.agents.llm_provider import get_model_name, get_provider_kind
+    from app.agents.llm_provider import get_model_name
     from app.observability import metrics as _m
     from app.observability.tracing import chat_span, maybe_attach_content
 
     llm = get_llm()
-    kind = get_provider_kind()
-    model = get_model_name(kind)
+    model = get_model_name()
     prompt_text = " ".join(
         (getattr(m, "content", "") if isinstance(getattr(m, "content", ""), str) else str(getattr(m, "content", "")))
         for m in (messages if isinstance(messages, list) else [messages])

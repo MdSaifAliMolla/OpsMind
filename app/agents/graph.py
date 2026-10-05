@@ -5,7 +5,7 @@ import uuid
 from urllib.parse import urlparse
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, Send
+from langgraph.types import Command
 
 from app.agents.approval import approval_node
 from app.agents.execute import execute_node
@@ -14,35 +14,11 @@ from app.agents.rag import rag_node
 from app.agents.rca import rca_node
 from app.agents.remediation import remediation_node
 from app.agents.state import IncidentState
-from app.agents.team import (
-    INVESTIGATORS,
-    get_mode,
-    join,
-    judge,
-    logs_agent,
-    metrics_agent,
-    rca_change_first,
-    rca_metrics_first,
-    runbook_agent,
-    trace_agent,
-)
 from app.agents.triage import triage_node
 from app.agents.verify import verify_node
 from app.observability.tracing import finish_incident_span, incident_span, traced
 
 log = logging.getLogger(__name__)
-
-
-def _triage_router(state: dict):
-    if get_mode() == "single":
-        return "observability"
-    return [Send(name, {"incident": state.get("incident")}) for name in INVESTIGATORS]
-
-
-def _join_router(state: dict):
-    if get_mode() == "debate":
-        return [Send("rca_metrics_first", {}), Send("rca_change_first", {})]
-    return "rca"
 
 
 def _approval_router(state: dict) -> str:
@@ -104,26 +80,11 @@ _builder.add_node("remediation", traced("remediation", remediation_node))
 _builder.add_node("approval", traced("approval", approval_node))
 _builder.add_node("execute", traced("execute", execute_node))
 _builder.add_node("verify", traced("verify", verify_node))
-_builder.add_node("metrics_agent", traced("metrics_agent", metrics_agent))
-_builder.add_node("logs_agent", traced("logs_agent", logs_agent))
-_builder.add_node("trace_agent", traced("trace_agent", trace_agent))
-_builder.add_node("runbook_agent", traced("runbook_agent", runbook_agent))
-_builder.add_node("join", traced("join", join))
-_builder.add_node("rca_metrics_first", traced("rca_metrics_first", rca_metrics_first))
-_builder.add_node("rca_change_first", traced("rca_change_first", rca_change_first))
-_builder.add_node("judge", traced("judge", judge))
 _builder.add_edge(START, "triage")
-_builder.add_conditional_edges("triage", _triage_router)
-for _name in INVESTIGATORS:
-    _builder.add_edge(_name, "join")
-_builder.add_conditional_edges("join", _join_router)
-_builder.add_edge("rca_metrics_first", "judge")
-_builder.add_edge("rca_change_first", "judge")
+_builder.add_edge("triage", "observability")
 _builder.add_edge("observability", "rag")
 _builder.add_edge("rag", "rca")
 _builder.add_conditional_edges("rca", _confidence_router,
-                               {"remediation": "remediation", "observability": "observability"})
-_builder.add_conditional_edges("judge", _confidence_router,
                                {"remediation": "remediation", "observability": "observability"})
 _builder.add_edge("remediation", "approval")
 _builder.add_conditional_edges("approval", _approval_router, {"execute": "execute", END: END})

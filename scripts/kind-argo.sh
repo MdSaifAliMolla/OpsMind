@@ -21,3 +21,8 @@ kubectl wait --for=condition=available deploy/argocd-server -n argocd --timeout=
 kubectl apply -f argocd/app.yaml
 kubectl -n opsmind get pods
 echo "port-forward: kubectl -n opsmind port-forward svc/opsmind-api 4000:4000"
+
+# Helpers (were Makefile targets):
+#   eval:        python -m app.evaluation.run
+#   port-api:    kubectl -n opsmind port-forward svc/opsmind-api 4000:4000
+#   eks-destroy: cd terraform/eks && terraform destroy   (EKS bills while the cluster exists)

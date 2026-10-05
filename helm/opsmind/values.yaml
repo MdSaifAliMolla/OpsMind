@@ -33,14 +33,10 @@ resources:
 # Env that is safe to check in. Secrets go under `secrets` (mounted as env).
 env:
   OPSMIND_CHECKPOINTER: auto
-  OPSMIND_MODE: single
   OPSMIND_APPROVAL_TTL_MIN: "60"
   OPSMIND_RATE_LIMIT_PER_MIN: "0"
   OPSMIND_TRACE_CONTENT: "false"
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
-  OPSMIND_LLM_PROVIDER: gemini
-  OPSMIND_LLM_BASE_URL: ""
-  OPSMIND_LLM_MODEL: ""
   QDRANT_URL: http://opsmind-qdrant:6333
   GEMINI_MODEL: gemini-3.5-flash-lite
   HF_HUB_OFFLINE: "0"

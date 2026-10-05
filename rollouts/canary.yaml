@@ -1,0 +1,60 @@
+# Progressive delivery with Argo Rollouts (canary 25% -> 50% -> 100%).
+# Install controller once: kubectl apply -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+# Then replace the Helm Deployment with this Rollout (same labels/selectors).
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: opsmind-api
+  namespace: opsmind
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: opsmind-api }
+  template:
+    metadata:
+      labels: { app: opsmind-api }
+    spec:
+      serviceAccountName: opsmind
+      containers:
+        - name: api
+          image: ghcr.io/YOU/opsmind-api:latest
+          ports: [{ containerPort: 4000 }]
+          readinessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  strategy:
+    canary:
+      steps:
+        - setWeight: 25
+        - pause: { duration: 2m }
+        - analysis:
+            templates: [{ templateName: opsmind-success-rate }]
+            args: [{ name: service, value: opsmind-api }]
+        - setWeight: 50
+        - pause: { duration: 2m }
+        - setWeight: 100
+---
+# AnalysisTemplate: auto-rollback if success rate or eval drops during canary.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: opsmind-success-rate
+  namespace: opsmind
+spec:
+  args: [{ name: service }]
+  metrics:
+    - name: success-rate
+      interval: 1m
+      successCondition: result[0] > 0.7
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.monitoring:9090
+          query: opsmind_agent_success_rate
+    - name: eval-rca
+      interval: 1m
+      successCondition: result[0] > 0.55
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.monitoring:9090
+          query: opsmind_eval_rca_accuracy

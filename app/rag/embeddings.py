@@ -4,8 +4,6 @@ import os
 import re
 import threading
 
-import requests
-
 log = logging.getLogger(__name__)
 
 DIM = 384
@@ -59,19 +57,6 @@ def _st_embed(text: str):
 
 
 def embed_texts(texts: list) -> list:
-    key = os.getenv("VOYAGE_API_KEY")
-    if key:
-        try:
-            r = requests.post(
-                "https://api.voyageai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {key}"},
-                json={"model": "voyage-3", "input": texts},
-                timeout=30,
-            )
-            if r.ok:
-                return [d["embedding"] for d in r.json()["data"]]
-        except Exception:
-            pass
     global _st_failed
     if not _st_failed:
         try:
@@ -87,21 +72,6 @@ def embed_texts(texts: list) -> list:
 
 
 def embed_text(text: str):
-    key = os.getenv("VOYAGE_API_KEY")
-    if key:
-        try:
-            r = requests.post(
-                "https://api.voyageai.com/v1/embeddings",
-                headers={"Authorization": f"Bearer {key}"},
-                json={"model": "voyage-3", "input": text},
-                timeout=15,
-            )
-            if r.ok:
-                v = r.json()["data"][0]["embedding"]
-                if v:
-                    return v
-        except Exception:
-            pass
     st = _st_embed(text)
     if st is not None:
         return st
@@ -109,8 +79,6 @@ def embed_text(text: str):
 
 
 def embedding_backend() -> str:
-    if os.getenv("VOYAGE_API_KEY"):
-        return "voyage"
     if _st_model is not None:
         return "sentence-transformers"
     if _st_failed:
@@ -124,8 +92,6 @@ def embedding_backend() -> str:
 
 
 def warmup():
-    if os.getenv("VOYAGE_API_KEY"):
-        return
     _st_embed("opsmind embedding warmup")
 
 
