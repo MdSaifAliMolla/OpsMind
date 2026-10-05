@@ -1,0 +1,15 @@
+{
+  "title": "OpsMind — AI Agent",
+  "uid": "opsmind-ai",
+  "timezone": "utc",
+  "panels": [
+    {"title": "Agent success rate", "type": "stat", "targets": [{"expr": "opsmind_agent_success_rate"}]},
+    {"title": "RCA confidence (avg)", "type": "gauge", "targets": [{"expr": "opsmind_rca_confidence_avg"}]},
+    {"title": "LLM cost USD (total)", "type": "stat", "targets": [{"expr": "opsmind_llm_cost_usd_total"}]},
+    {"title": "LLM tokens by direction", "type": "timeseries", "targets": [{"expr": "sum by (direction) (opsmind_llm_tokens_total)"}]},
+    {"title": "LLM latency avg (s)", "type": "timeseries", "targets": [{"expr": "opsmind_llm_latency_seconds_avg"}]},
+    {"title": "Eval — severity / RCA accuracy", "type": "timeseries", "targets": [{"expr": "opsmind_eval_severity_accuracy"}, {"expr": "opsmind_eval_rca_accuracy"}]},
+    {"title": "Incidents by severity", "type": "timeseries", "targets": [{"expr": "sum by (severity) (opsmind_incidents_total)"}]},
+    {"title": "Failures", "type": "stat", "targets": [{"expr": "opsmind_incidents_failed_total"}]}
+  ]
+}

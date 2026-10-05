@@ -1,0 +1,83 @@
+# Default values. Override with --set or -f.
+image:
+  repository: ghcr.io/YOU/opsmind-api
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 4000
+
+ingress:
+  enabled: false
+  className: alb  # EKS: alb | kind/nginx: nginx
+  host: opsmind.example.com
+  annotations: {}
+    # EKS ALB example:
+    # alb.ingress.kubernetes.io/scheme: internet-facing
+    # alb.ingress.kubernetes.io/target-type: ip
+  tls: []
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests: { cpu: 250m, memory: 512Mi }
+  limits: { cpu: "2", memory: 2Gi }
+
+# Env that is safe to check in. Secrets go under `secrets` (mounted as env).
+env:
+  OPSMIND_CHECKPOINTER: auto
+  OPSMIND_MODE: single
+  OPSMIND_APPROVAL_TTL_MIN: "60"
+  OPSMIND_RATE_LIMIT_PER_MIN: "0"
+  OPSMIND_TRACE_CONTENT: "false"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OPSMIND_LLM_PROVIDER: gemini
+  OPSMIND_LLM_BASE_URL: ""
+  OPSMIND_LLM_MODEL: ""
+  QDRANT_URL: http://opsmind-qdrant:6333
+  GEMINI_MODEL: gemini-3.5-flash-lite
+  HF_HUB_OFFLINE: "0"
+  OPSMIND_NAMESPACE: default
+  OPSMIND_EXECUTE: "false"
+
+secrets:
+  # Create with: kubectl create secret generic opsmind-secrets --from-literal=...
+  # Or use external-secrets. Helm will NOT create secrets with empty values.
+  DATABASE_URL: ""
+  GOOGLE_API_KEY: ""
+  OPSMIND_API_KEY: ""
+  LANGFUSE_PUBLIC_KEY: ""
+  LANGFUSE_SECRET_KEY: ""
+
+postgresql:
+  enabled: true
+  auth:
+    username: opsmind
+    database: opsmind
+    # password comes from existingSecret in prod; dev uses this placeholder
+    password: opsmind
+  primary:
+    persistence: { enabled: true, size: 8Gi }
+
+qdrant:
+  enabled: true
+
+demo:
+  enabled: true
+  replicaCount: 1
+  port: 8002
+
+serviceMonitor:
+  enabled: true  # needs prometheus-operator; harmless if CRD missing (ArgoCD ignores)
+  interval: 15s
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

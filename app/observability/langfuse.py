@@ -1,8 +1,11 @@
+import logging
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()  # keys must resolve regardless of import order
+
+log = logging.getLogger(__name__)
 
 _handler = "unset"
 _client = None
@@ -13,6 +16,17 @@ def flush_traces():
         _client.flush()
 
 
+def warmup():
+    if _client is None:
+        get_trace_handler()
+    if _client is None:
+        return
+    try:
+        _client.auth_check()
+    except Exception as e:
+        log.debug(f"langfuse warmup skipped: {e}")
+
+
 def get_trace_handler():
     global _handler, _client
     if _handler != "unset":
@@ -21,8 +35,6 @@ def get_trace_handler():
         _handler = None
         return None
     try:
-        # langfuse>=4 needs an initialized client first; the langchain
-        # handler then attaches to it by public key.
         host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") \
             or "https://cloud.langfuse.com"
         from langfuse import Langfuse

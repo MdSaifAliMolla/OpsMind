@@ -64,8 +64,6 @@ SCENARIOS = [
         "expected_risk": "medium",
         "severity": "P1",
     },
-    # novel families: deliberately outside the rules engine's coverage,
-    # so the eval can measure what the LLM adds over rules
     {
         "type": "dns_resolution_failure",
         "service": "api-gateway",
@@ -105,9 +103,72 @@ SCENARIOS = [
         "severity": "P2",
         "novel": True,
     },
+    {
+        "type": "slow_query_degradation",
+        "service": "payment-api",
+        "root_cause": "slow database query degrading latency",
+        "metrics": {"error_rate": 0.045, "p95_latency_ms": 1150, "cpu_pct": 52, "memory_pct": 58, "db_connections": 45, "request_rate": 1800},
+        "logs": ["slow query: SELECT orders took 980ms", "p95 latency above SLO for 10m, error budget burning slowly"],
+        "deployment_minutes_ago": 700,
+        "runbook": "database.md",
+        "expected_remediation": "rollback deployment",
+        "expected_risk": "medium",
+        "severity": "P3",
+    },
+    {
+        "type": "cache_hit_drop",
+        "service": "search-api",
+        "root_cause": "cache hit ratio drop overloading origin",
+        "metrics": {"error_rate": 0.035, "p95_latency_ms": 950, "cpu_pct": 68, "memory_pct": 62, "request_rate": 4200},
+        "logs": ["cache hit ratio 0.41 below threshold 0.8", "origin latency climbing as cache bypass grows"],
+        "deployment_minutes_ago": 1200,
+        "runbook": "networking.md",
+        "expected_remediation": "scale replicas",
+        "expected_risk": "low",
+        "severity": "P3",
+    },
+    {
+        "type": "minor_error_blip",
+        "service": "checkout-service",
+        "root_cause": "transient upstream error blip",
+        "metrics": {"error_rate": 0.012, "p95_latency_ms": 320, "cpu_pct": 28, "memory_pct": 48, "request_rate": 900},
+        "logs": ["transient upstream timeout, succeeded on retry", "single error burst, no sustained failure"],
+        "deployment_minutes_ago": 5000,
+        "runbook": "networking.md",
+        "expected_remediation": "restart pods",
+        "expected_risk": "low",
+        "severity": "P4",
+    },
 ]
 
 NOVEL_TYPES = {s["type"] for s in SCENARIOS if s.get("novel")}
+
+BACKGROUND_RANGES = {
+    "error_rate": (0.001, 0.01),
+    "p95_latency_ms": (80, 450),
+    "cpu_pct": (15, 60),
+    "memory_pct": (35, 70),
+    "request_rate": (300, 2500),
+    "db_connections": (5, 40),
+    "redis_up": (1, 1),
+    "pods_ready": (1, 1),
+}
+
+
+def sample_background():
+    bg = {}
+    for k, (lo, hi) in BACKGROUND_RANGES.items():
+        if k in ("redis_up", "pods_ready"):
+            bg[k] = 1
+        elif k == "error_rate":
+            bg[k] = round(random.uniform(lo, hi), 4)
+        elif k == "p95_latency_ms":
+            bg[k] = round(random.uniform(lo, hi), 1)
+        elif k == "request_rate":
+            bg[k] = int(random.uniform(lo, hi))
+        else:
+            bg[k] = round(random.uniform(lo, hi), 1)
+    return bg
 
 
 def jitter(v, pct=0.15):
@@ -116,19 +177,27 @@ def jitter(v, pct=0.15):
     return v
 
 
-def generate(n=40, out_dir=None):
+def generate(n=160, out_dir=None):
     if out_dir is None:
         out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "incidents")
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    classic = [s for s in SCENARIOS if not s.get("novel")][:5]
     for i in range(n):
-        base = random.choices(SCENARIOS, weights=[1 if s.get("novel") else 2 for s in SCENARIOS])[0]
+        if i < len(classic):
+            base = classic[i]
+        else:
+            base = random.choices(SCENARIOS, weights=[1 if s.get("novel") else 2 for s in SCENARIOS])[0]
         inc_id = f"incident_{i+1:03d}"
         folder = os.path.join(out_dir, inc_id)
         os.makedirs(folder, exist_ok=True)
 
-        metrics = {k: jitter(v) for k, v in base["metrics"].items()}
+        metrics = sample_background()
+        for k, v in base["metrics"].items():
+            metrics[k] = jitter(v, 0.2)
+        if random.random() < 0.05:
+            metrics.pop(random.choice(["cpu_pct", "memory_pct", "request_rate"]), None)
         record = {
             "incident_id": inc_id,
             "service": base["service"],
@@ -154,7 +223,7 @@ def generate(n=40, out_dir=None):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--n", type=int, default=40)
+    p.add_argument("--n", type=int, default=160)
     p.add_argument("--out", type=str, default=None)
     args = p.parse_args()
     random.seed(42)

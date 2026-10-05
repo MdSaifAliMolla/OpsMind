@@ -10,15 +10,38 @@ spec:
     metadata:
       labels: { app: opsmind-api }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
       containers:
         - name: api
-          image: opsmind-api:latest
+          image: opsmind-api:1.0.0
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 4000 }]
+          livenessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
           env:
             - name: DATABASE_URL
-              value: postgres://opsmind:opsmind@postgres:5432/opsmind
+              valueFrom:
+                secretKeyRef: { name: opsmind-secrets, key: DATABASE_URL, optional: true }
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef: { name: opsmind-secrets, key: GOOGLE_API_KEY, optional: true }
             - name: QDRANT_URL
               value: http://qdrant:6333
+            - name: OPSMIND_CHECKPOINTER
+              value: auto
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           resources:
             requests: { cpu: 250m, memory: 512Mi }
             limits: { cpu: "2", memory: 2Gi }
@@ -31,7 +54,7 @@ spec:
   selector: { app: opsmind-api }
   ports: [{ port: 4000, targetPort: 4000 }]
 ---
-# scales the agent itself on load: incident bursts spawn more replicas
+# replicas >1 needs Postgres checkpointer; memory mode needs single replica
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

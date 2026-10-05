@@ -57,3 +57,18 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   state         JSONB NOT NULL,
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
+
+-- Phase 7: append-only approval audit (hash-chained per incident).
+CREATE TABLE IF NOT EXISTS approvals (
+  id              SERIAL PRIMARY KEY,
+  incident_id     TEXT REFERENCES incidents(id),
+  approver        TEXT NOT NULL,
+  approver_source TEXT NOT NULL DEFAULT 'body',
+  plan_hash       TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL DEFAULT '',
+  decision        TEXT NOT NULL,
+  prev_hash       TEXT NOT NULL DEFAULT '',
+  row_hash        TEXT NOT NULL,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS approvals_incident_idx ON approvals (incident_id);

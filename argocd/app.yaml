@@ -1,0 +1,24 @@
+# GitOps: ArgoCD Application for opsmind (Helm chart in this repo).
+# Apply once: kubectl apply -f argocd/app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: opsmind
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOU/opsmind.git
+    targetRevision: main
+    path: helm/opsmind
+    helm:
+      valueFiles: [values.yaml]
+      parameters:
+        - name: image.tag
+          value: latest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: opsmind
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

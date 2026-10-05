@@ -9,6 +9,28 @@ groups:
         annotations:
           summary: "OpsMind investigations are failing"
 
+      # AI quality guards
+      - alert: OpsMindLowSuccessRate
+        expr: opsmind_agent_success_rate < 0.7
+        for: 5m
+        labels: { severity: ticket, service: opsmind-api }
+        annotations:
+          summary: "Agent success rate below 70%"
+
+      - alert: OpsMindEvalRegression
+        expr: opsmind_eval_rca_accuracy < 0.6 or opsmind_eval_severity_accuracy < 0.7
+        for: 5m
+        labels: { severity: ticket, service: opsmind-api }
+        annotations:
+          summary: "Gated eval regressed (need 70% severity / 60% RCA)"
+
+      - alert: OpsMindLLMErrors
+        expr: rate(opsmind_llm_errors_total[5m]) > 0.05
+        for: 5m
+        labels: { severity: ticket, service: opsmind-api }
+        annotations:
+          summary: "LLM error rate elevated"
+
   - name: demo-service
     interval: 15s
     rules:

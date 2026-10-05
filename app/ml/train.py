@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
@@ -26,6 +26,7 @@ except ImportError:
 
 
 def build_model(params):
+    params = dict(params)
     if HAS_XGB:
         n_classes = params.pop("_n_classes")
         return xgb.XGBClassifier(
@@ -46,7 +47,12 @@ def main():
     y = le.fit_transform(df["severity"])
     X = df[FEATURE_COLUMNS]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=0.30, random_state=42, stratify=y)
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=0.50, random_state=42, stratify=y_temp)
+    print(f"split: train={len(X_train)} val={len(X_val)} test={len(X_test)}")
+    print(f"classes: {list(le.classes_)}")
 
     grid = [
         {"max_depth": 4, "learning_rate": 0.1},
@@ -54,9 +60,15 @@ def main():
         {"max_depth": 8, "learning_rate": 0.05},
     ]
 
-    tracking = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-    if HAS_MLFLOW:
+    tracking = os.getenv("MLFLOW_TRACKING_URI")
+    if HAS_MLFLOW and tracking:
         try:
+            import socket
+            from urllib.parse import urlparse
+
+            parts = urlparse(tracking)
+            if parts.hostname:
+                socket.create_connection((parts.hostname, parts.port or 5000), timeout=2).close()
             mlflow.set_tracking_uri(tracking)
             mlflow.set_experiment("incident-severity")
         except Exception:
@@ -66,7 +78,10 @@ def main():
             mlflow_active = True
     else:
         mlflow_active = False
-        print("mlflow not installed, training locally without tracking")
+        if not HAS_MLFLOW:
+            print("mlflow not installed, training locally without tracking")
+        else:
+            print("MLFLOW_TRACKING_URI unset, training locally without tracking")
 
     best_f1 = -1
     best_model = None
@@ -84,21 +99,20 @@ def main():
             model = RandomForestClassifier(n_estimators=200, random_state=42)
             model.fit(X_train, y_train)
 
-        preds = model.predict(X_test)
-        # xgboost 3.x returns the probability matrix from predict
+        preds = model.predict(X_val)
         import numpy as np
         preds = np.asarray(preds)
         if preds.ndim > 1:
             preds = preds.argmax(axis=1)
-        f1 = f1_score(y_test, preds, average="macro")
-        print(params, "F1:", round(f1, 4))
-        print(classification_report(y_test, preds, target_names=list(le.classes_)))
+        f1 = f1_score(y_val, preds, average="macro")
+        print(params, "val F1:", round(f1, 4))
+        print(classification_report(y_val, preds, target_names=list(le.classes_)))
 
         if mlflow_active:
             try:
                 with mlflow.start_run() as run:
                     mlflow.log_params(params)
-                    mlflow.log_metric("f1_macro", f1)
+                    mlflow.log_metric("f1_macro_val", f1)
                     if HAS_XGB and type(model).__name__ == "XGBClassifier":
                         mlflow.xgboost.log_model(model, "model")
                     else:
@@ -116,6 +130,16 @@ def main():
             best_params = params
             best_run_id = run_id
 
+    import numpy as np
+    test_preds = np.asarray(best_model.predict(X_test))
+    if test_preds.ndim > 1:
+        test_preds = test_preds.argmax(axis=1)
+    test_f1 = f1_score(y_test, test_preds, average="macro")
+    print("test classification report (held-out):")
+    print(classification_report(y_test, test_preds, target_names=list(le.classes_)))
+    print(f"val F1: {best_f1:.4f} test F1: {test_f1:.4f} with {best_params}")
+    cm = confusion_matrix(y_test, test_preds).tolist()
+
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "artifacts")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -124,9 +148,13 @@ def main():
     with open(os.path.join(out_dir, "labels.json"), "w") as f:
         json.dump(list(le.classes_), f)
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
-        json.dump({"f1_macro": best_f1, "best_params": best_params}, f, indent=2)
+        json.dump({"f1_macro_val": best_f1, "f1_macro_test": test_f1,
+                   "best_params": best_params,
+                   "split": {"train": len(X_train), "val": len(X_val), "test": len(X_test)},
+                   "confusion_matrix": cm,
+                   "labels": list(le.classes_)}, f, indent=2)
 
-    print(f"best F1: {best_f1:.4f} with {best_params}")
+    print(f"best val F1: {best_f1:.4f} test F1: {test_f1:.4f} with {best_params}")
     print(f"saved to {out_dir}")
 
     if mlflow_active and best_run_id:

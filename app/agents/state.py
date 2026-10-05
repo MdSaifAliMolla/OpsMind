@@ -19,6 +19,8 @@ class IncidentState(TypedDict, total=False):
     verification_result: dict | None
     investigation_loops: int
     executions: int
+    injection_suspected: bool
+    agent_votes: Annotated[list, operator.add]
 
 
 def mark(node: str) -> dict:

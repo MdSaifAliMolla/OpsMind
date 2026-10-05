@@ -4,21 +4,29 @@ from app.tools.prometheus import query_metric_synthetic
 
 def verify_node(state: dict):
     plan = state.get("remediation_plan") or {}
-    before = plan.get("pre_error_rate",
-                      state["incident"].get("metrics", {}).get("error_rate", 0))
-    executed = plan.get("executed", False)
-
-    # re-read through the same metric path the investigation used
-    after = query_metric_synthetic(state["incident"], "error_rate")["value"]
+    incident = state.get("incident") or {}
+    incident_metrics = incident.get("metrics") or {}
+    try:
+        before = float(plan.get("pre_error_rate",
+                        incident_metrics.get("error_rate", 0)))
+    except (TypeError, ValueError):
+        before = 0.0
+    executed = bool(plan.get("executed", False))
+    try:
+        after = float(query_metric_synthetic(incident, "error_rate")["value"])
+    except Exception:
+        after = float(incident_metrics.get("error_rate", 0))
     healthy = bool(executed and after < 0.05 and after < before)
 
     if healthy:
-        # against a real cluster, also require the rollout to look finished
         from app.tools.kubernetes import connected, rollout_status
-        if connected():
-            rollout_ok = rollout_status(state["incident"]["service"])
-            if rollout_ok is False:
-                healthy = False
+        try:
+            if connected():
+                rollout_ok = rollout_status(str(incident.get("service", "unknown")))
+                if rollout_ok is False:
+                    healthy = False
+        except Exception:
+            pass
 
     return {**mark("verify"),
             "verification_result": {"before": before, "after": after, "healthy": healthy}}

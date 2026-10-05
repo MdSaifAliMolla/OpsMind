@@ -3,14 +3,17 @@ import os
 
 log = logging.getLogger(__name__)
 
-# dry run by default so demos never touch a real cluster.
-DRY = os.getenv("OPSMIND_EXECUTE", "true").lower() != "true"
+def _dry() -> bool:
+    return os.getenv("OPSMIND_EXECUTE", "false").lower() != "true"
+
+
+def _namespace() -> str:
+    return os.getenv("OPSMIND_NAMESPACE", "default")
 
 _connected = "unset"
 
 
 def connected() -> bool:
-    """True when a kubeconfig/cluster is reachable. Cheap cached probe."""
     global _connected
     if _connected != "unset":
         return _connected
@@ -30,7 +33,12 @@ def connected() -> bool:
 
 
 def _sh(cmd: str):
-    print(f"[kubectl] {cmd}{' (dry-run)' if DRY or not connected() else ''}")
+    ns = _namespace()
+    log.info(f"[kubectl] {cmd} -n {ns}{' (dry-run)' if _dry() or not connected() else ''}")
+
+
+def _dry_result(action: str, **extra) -> dict:
+    return {"ok": True, "action": action, "dry_run": True, **extra}
 
 
 def get_deployment_history(service: str, incident=None):
@@ -73,7 +81,6 @@ def list_pods(service: str):
 
 
 def rollout_status(service: str):
-    """True when the deployment looks fully rolled out, None when unknown."""
     if not connected():
         return None
     try:
@@ -93,7 +100,7 @@ def rollout_status(service: str):
 
 
 def restart_pods(service: str):
-    if connected() and not DRY:
+    if connected() and not _dry():
         from kubernetes import client
 
         apps = client.AppsV1Api()
@@ -103,13 +110,13 @@ def restart_pods(service: str):
             apps.patch_namespaced_deployment(
                 d.metadata.name, d.metadata.namespace,
                 {"spec": {"template": {"metadata": {"annotations": {"opsmind/restarted": "true"}}}}})
-    else:
-        _sh(f"rollout restart deployment/{service}")
-    return {"ok": True, "action": "restart pods"}
+        return {"ok": True, "action": "restart pods", "dry_run": False}
+    _sh(f"rollout restart deployment/{service}")
+    return _dry_result("restart pods")
 
 
 def rollback_deployment(service: str):
-    if connected() and not DRY:
+    if connected() and not _dry():
         from kubernetes import client
 
         apps = client.AppsV1Api()
@@ -127,13 +134,13 @@ def rollback_deployment(service: str):
                 body = {"spec": {"template": {"spec": {"containers": [
                     {"name": c.name, "image": c.image} for c in prev[-2].spec.template.spec.containers]}}}}
                 apps.patch_namespaced_deployment(d.metadata.name, d.metadata.namespace, body)
-    else:
-        _sh(f"rollout undo deployment/{service}")
-    return {"ok": True, "action": "rollback deployment"}
+        return {"ok": True, "action": "rollback deployment", "dry_run": False}
+    _sh(f"rollout undo deployment/{service}")
+    return _dry_result("rollback deployment")
 
 
 def scale_replicas(service: str, replicas=5):
-    if connected() and not DRY:
+    if connected() and not _dry():
         from kubernetes import client
 
         apps = client.AppsV1Api()
@@ -142,11 +149,19 @@ def scale_replicas(service: str, replicas=5):
         for d in deps:
             apps.patch_namespaced_deployment_scale(
                 d.metadata.name, d.metadata.namespace, {"spec": {"replicas": replicas}})
-    else:
-        _sh(f"scale deployment/{service} --replicas={replicas}")
-    return {"ok": True, "action": "scale replicas", "replicas": replicas}
+        return {"ok": True, "action": "scale replicas", "replicas": replicas, "dry_run": False}
+    _sh(f"scale deployment/{service} --replicas={replicas}")
+    return _dry_result("scale replicas", replicas=replicas)
 
 
 def restart_redis():
+    if connected() and not _dry():
+        from kubernetes import client
+
+        core = client.CoreV1Api()
+        pods = core.list_pod_for_all_namespaces(label_selector="app=redis").items
+        for p in pods:
+            core.delete_namespaced_pod(p.metadata.name, p.metadata.namespace)
+        return {"ok": True, "action": "restart redis", "dry_run": False}
     _sh("rollout restart statefulset/redis")
-    return {"ok": True, "action": "restart redis"}
+    return _dry_result("restart redis")

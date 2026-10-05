@@ -1,0 +1,25 @@
+# render.yaml — public demo on Render free tier (Dockerfile deploy).
+# Set secrets in the Render dashboard: GOOGLE_API_KEY, DATABASE_URL, QDRANT_URL.
+services:
+  - type: web
+    name: opsmind-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: HF_HUB_OFFLINE
+        value: "1"
+      - key: OPSMIND_CHECKPOINTER
+        value: memory
+      - key: OPSMIND_MODE
+        value: single
+      - key: OPSMIND_RATE_LIMIT_PER_MIN
+        value: "6"
+      - key: OPSMIND_APPROVAL_TTL_MIN
+        value: "30"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false

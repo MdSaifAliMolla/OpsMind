@@ -1,0 +1,92 @@
+name: ci-cd
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-api
+
+jobs:
+  lint-test-eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: opsmind
+          POSTGRES_PASSWORD: opsmind
+          POSTGRES_DB: opsmind
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U opsmind" --health-interval=5s
+          --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python -m ruff check app tests data
+      - run: python -m pytest tests/ -q
+      - run: python data/generate_incidents.py --n 40
+      - run: python -m app.ml.train
+        env: { MLFLOW_TRACKING_URI: "" }
+      - run: python -m app.rag.ingest
+      # Report-only on PRs (no key burn); gated on main with key.
+      - run: python -m app.evaluation.run --help
+      - name: Gated eval (main only, needs GOOGLE_API_KEY)
+        if: github.ref == 'refs/heads/main'
+        run: python -m app.evaluation.run
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DATABASE_URL: postgres://opsmind:opsmind@localhost:5432/opsmind
+      - name: Eval report (main only)
+        if: github.ref == 'refs/heads/main'
+        run: python -m app.evaluation.report --results app/evaluation/results.json --out docs/eval/REPORT.md
+
+  build-push:
+    needs: lint-test-eval
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ env.IMAGE }}:latest,${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint helm/opsmind
+      - run: helm template opsmind helm/opsmind --set image.repository=${{ env.IMAGE }} --set image.tag=${{ github.sha }} | kubectl apply --dry-run=client -f - --validate=false
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=terraform/eks init -backend=false
+      - run: terraform -chdir=terraform/eks validate
+
+  # GitOps: ArgoCD syncs helm/opsmind on main. This job just stamps the image tag
+  # so the GitOps repo/pin stays auditable. Swap to your GitOps repo if separate.
+  stamp-image:
+    if: github.ref == 'refs/heads/main'
+    needs: [build-push, helm-validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "IMAGE=${{ env.IMAGE }}:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Deploy with: helm upgrade --install opsmind helm/opsmind --set image.tag=${{ github.sha }}"

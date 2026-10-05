@@ -1,0 +1,28 @@
+# fly.toml — public demo on Fly.io (~$0, sleeps when idle on free tier).
+# Secrets (never in this file): fly secrets set GOOGLE_API_KEY=... DATABASE_URL=... QDRANT_URL=...
+app = "opsmind-demo"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.checks]
+    [http_service.checks.health]
+      interval = "30s"
+      timeout = "5s"
+      method = "GET"
+      path = "/health"
+
+[env]
+  HF_HUB_OFFLINE = "1"
+  OPSMIND_CHECKPOINTER = "memory"
+  OPSMIND_MODE = "single"
+  OPSMIND_RATE_LIMIT_PER_MIN = "6"
+  OPSMIND_APPROVAL_TTL_MIN = "30"

@@ -1,9 +1,3 @@
-"""Grounds incidents in the RCAEval benchmark (phamquiluan/RCAEval on HF).
-
-RE2 cases are chaos faults injected into real microservice testbeds, each with
-ground-truth fault family + service in the case name and real metrics/logs.
-We never train on this; it is a held-out real-data eval track.
-"""
 import logging
 import os
 
@@ -12,7 +6,6 @@ log = logging.getLogger(__name__)
 REPO = "phamquiluan/RCAEval"
 CACHE = os.path.join(os.getcwd(), "data/real/rcaeval")
 
-# transparent keyword sets used to score family-level RCA hits (printed in output)
 FAMILY_KEYWORDS = {
     "cpu": {"cpu", "throttle", "saturation", "overload", "spike", "traffic", "scale"},
     "mem": {"memory", "leak", "oom", "heap"},
@@ -32,7 +25,6 @@ def family_hit(predicted: str, fault: str) -> bool:
 
 
 def fetch_case(case: str):
-    """Download one case's files, return local paths."""
     from huggingface_hub import hf_hub_download
 
     token = os.getenv("HF_TOKEN") or None
@@ -66,13 +58,6 @@ def _clip(x, lo=0.0, hi=100.0):
 
 
 def build_incident(case: str):
-    """Map one RCAEval case onto our incident schema (mapping documented here).
-
-    metrics: abnormal-window means of the faulted service's cpu/mem/latency
-      series; error_rate = share of error-hint log lines in the window.
-    logs: up to 8 error-hint lines from the faulted service after injection.
-    alert_type is deliberately neutral so the rules fallback can't echo the fault.
-    """
     import pandas as pd
 
     paths = fetch_case(case)
@@ -82,9 +67,6 @@ def build_incident(case: str):
         inject_ts = int(f.read().strip())
 
     metrics_df = pd.read_parquet(paths["metrics.parquet"])
-    # NB: the metrics clock doesn't align with inject_time in these files, so
-    # windows come from file position instead: RE2 runs normal traffic first,
-    # then injects the fault, so head ~= baseline and tail ~= fault-active.
     baseline = metrics_df.head(360)
     abnormal = metrics_df.tail(360)
 
@@ -96,7 +78,6 @@ def build_incident(case: str):
         s = _series(metrics_df, service, suffix)
         return float(baseline[s].mean()) if s is not None else 0.0
 
-    # mem is raw bytes: map abnormal-vs-baseline deviation onto a 0-99 gauge
     mem_base = base("mem") or 1.0
     memory_pct = _clip(50 + 50 * (abn("mem") - mem_base) / mem_base, 0, 99)
     cpu_base = base("cpu") or 1.0
@@ -120,7 +101,6 @@ def build_incident(case: str):
             "cpu_pct": round(_clip(abn("cpu")), 1),
             "memory_pct": round(memory_pct, 1),
             "open_sockets": round(abn("socket"), 1),
-            # baseline context the rules ignore but an LLM reader can use
             "cpu_baseline": round(cpu_base, 1),
             "memory_baseline_mb": round(mem_base / 1e6, 1),
         },
@@ -128,4 +108,8 @@ def build_incident(case: str):
         "deployment_minutes_ago": 9999,
         "ground_truth": {"fault": fault, "service": service, "case": case},
     }
+    from app.ml.features import DEFAULTS, FEATURE_COLUMNS
+
+    for col in FEATURE_COLUMNS:
+        incident["metrics"].setdefault(col, DEFAULTS[col])
     return incident

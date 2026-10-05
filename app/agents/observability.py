@@ -1,4 +1,5 @@
 import json
+import time
 
 from app.agents.llm import get_llm, note_llm_error
 from app.agents.state import mark
@@ -13,20 +14,44 @@ def observability_node(state: dict):
     tools = build_tools(incident)
     by_name = {t.name: t for t in tools}
     evidence = []
-
-    llm = get_llm()
+    try:
+        llm = get_llm()
+    except Exception:
+        llm = None
     if llm is not None:
         try:
-            res = llm.bind_tools(tools).invoke(
-                f"Incident on {incident['service']}: {incident.get('alert_type')}. "
-                "Gather metrics, logs, and deployment history with the available tools."
+            from app.agents.llm_provider import get_model_name
+            from app.observability import metrics as _m
+            from app.observability.tracing import chat_span, maybe_attach_content
+
+            model = get_model_name()
+            prompt = (
+                f"Incident on {incident.get('service', 'unknown')}: {incident.get('alert_type')}. "
+                "Gather metrics, logs, deployment history, and traces with the available tools."
+            )
+            start = time.time()
+            with chat_span("observability", model) as span:
+                res = llm.bind_tools(tools).invoke(prompt)
+                maybe_attach_content(span, prompt, str(getattr(res, "content", "")))
+            _m.record_llm_call(
+                model,
+                len(prompt) // 4,
+                len(str(getattr(res, "content", ""))) // 4,
+                time.time() - start,
             )
             for call in res.tool_calls or []:
-                t = by_name.get(call["name"])
+                if isinstance(call, dict):
+                    name, args = call.get("name"), call.get("args", {})
+                else:  # langchain object form
+                    name, args = getattr(call, "name", None), getattr(call, "args", {}) or {}
+                t = by_name.get(name)
                 if t is None:
                     continue
-                evidence.append({"source": call["name"], "args": call["args"],
-                                 "result": json.loads(t.invoke(call["args"]))})
+                try:
+                    evidence.append({"source": name, "args": args,
+                                     "result": json.loads(t.invoke(args or {}))})
+                except Exception:
+                    continue
         except Exception as e:
             note_llm_error("tool loop", e)
 
@@ -44,5 +69,9 @@ def observability_node(state: dict):
     if not any(e["source"] == "get_deployment_history" for e in evidence):
         evidence.append({"source": "get_deployment_history", "args": {},
                          "result": json.loads(by_name["get_deployment_history"].invoke({}))})
+
+    if not any(e["source"] == "get_trace" for e in evidence):
+        evidence.append({"source": "get_trace", "args": {},
+                         "result": json.loads(by_name["get_trace"].invoke({}))})
 
     return {**mark("observability"), "evidence": evidence}
