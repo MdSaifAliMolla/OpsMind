@@ -9,7 +9,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}-api
+  IMAGE: ghcr.io/mdsaifalimolla/opsmind-api
 
 jobs:
   lint-test-eval:
@@ -25,18 +25,23 @@ jobs:
         options: >-
           --health-cmd="pg_isready -U opsmind" --health-interval=5s
           --health-timeout=5s --health-retries=5
+      qdrant:
+        image: qdrant/qdrant:v1.11.0
+        ports: ["6333:6333"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11", cache: pip }
-      - run: pip install -r requirements.txt
-      - run: python -m ruff check app tests data
-      - run: python -m pytest tests/ -q
+      - run: pip install -r requirements-dev.txt
+      - run: python -m ruff check app data scripts tests
+      - run: python -m pytest -q
       - run: python data/generate_incidents.py --n 40
-      - run: python -m app.ml.train
+      - run: python -m app.ml.family
         env: { MLFLOW_TRACKING_URI: "" }
       - run: python -m app.rag.ingest
-      # Report-only on PRs (no key burn); gated on main with key.
+        env:
+          QDRANT_URL: http://localhost:6333
+          DATABASE_URL: postgres://opsmind:opsmind@localhost:5432/opsmind
       - run: python -m app.evaluation.run --help
       - name: Gated eval (main only, needs GOOGLE_API_KEY)
         if: github.ref == 'refs/heads/main'
@@ -69,24 +74,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - run: helm lint helm/opsmind
-      - run: helm template opsmind helm/opsmind --set image.repository=${{ env.IMAGE }} --set image.tag=${{ github.sha }} | kubectl apply --dry-run=client -f - --validate=false
+      - run: |
+          wget -q https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          helm template opsmind helm/opsmind --set image.repository=${{ env.IMAGE }} --set image.tag=${{ github.sha }} | ./kubeconform -summary -ignore-missing-schemas
 
-  terraform-validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform -chdir=terraform/eks init -backend=false
-      - run: terraform -chdir=terraform/eks validate
-
-  # GitOps: ArgoCD syncs helm/opsmind on main. This job just stamps the image tag
-  # so the GitOps repo/pin stays auditable. Swap to your GitOps repo if separate.
   stamp-image:
     if: github.ref == 'refs/heads/main'
     needs: [build-push, helm-validate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - run: |
-          echo "IMAGE=${{ env.IMAGE }}:${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Deploy with: helm upgrade --install opsmind helm/opsmind --set image.tag=${{ github.sha }}"
+          sed -i "s/tag: .*/tag: \"${{ github.sha }}\"/" helm/opsmind/values.yaml
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add helm/opsmind/values.yaml
+          git commit -m "chore: GitOps sync to image tag ${{ github.sha }}" || echo "No changes to commit"
+          git push

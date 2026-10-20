@@ -23,13 +23,13 @@ def _service(name: str) -> str:
 
 
 def query_metrics_impl(service: str, metric: str) -> dict:
-    from app.tools.prometheus import query_metric_synthetic
+    from app.tools.prometheus import query_metric
 
     service = _service(service)
     metric = str(metric or "").strip()
     if metric not in METRICS_ALLOWLIST:
         raise ValueError(f"unknown metric {metric!r}; pick from {list(METRICS_ALLOWLIST)}")
-    return query_metric_synthetic({"service": service, "metrics": {}}, metric)
+    return query_metric({"service": service, "metrics": {}}, metric)
 
 
 def search_logs_impl(service: str, query: str, limit: int = 20) -> list:

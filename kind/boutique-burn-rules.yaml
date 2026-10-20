@@ -1,0 +1,30 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: boutique-burn
+  namespace: boutique
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: boutique-burn
+      interval: 30s
+      rules:
+        - alert: BoutiqueCPUStarvation
+          expr: avg by (pod) (rate(container_cpu_usage_seconds_total{namespace="boutique",pod=~"paymentservice.*"}[2m])) > 0.1
+          for: 2m
+          labels:
+            severity: P2
+            service: paymentservice
+            namespace: boutique
+          annotations:
+            summary: "paymentservice CPU starved (chaos-injected or real)"
+        - alert: BoutiquePodCrashloop
+          expr: max by (deployment) (max_over_time(kube_deployment_status_replicas_unavailable{namespace="boutique"}[5m])) > 0
+          for: 2m
+          labels:
+            severity: P1
+            service: "{{ $labels.deployment }}"
+            namespace: boutique
+          annotations:
+            summary: "boutique pods restarting repeatedly"

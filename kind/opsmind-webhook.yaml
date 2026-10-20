@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: opsmind-webhook
+  namespace: boutique
+spec:
+  route:
+    receiver: opsmind
+    matchers:
+      - name: severity
+        value: "P[12]"
+        matchType: "=~"
+  receivers:
+    - name: opsmind
+      webhookConfigs:
+        - url: http://host.docker.internal:4000/incidents/alertmanager
+          sendResolved: false

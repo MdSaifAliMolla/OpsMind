@@ -1,4 +1,3 @@
-{{/* Standard helpers */}}
 {{- define "opsmind.name" -}}opsmind{{- end }}
 {{- define "opsmind.fullname" -}}{{ .Release.Name }}-opsmind{{- end }}
 {{- define "opsmind.labels" -}}

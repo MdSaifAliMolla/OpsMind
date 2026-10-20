@@ -1,8 +1,6 @@
 import logging
 import os
-import socket
 import uuid
-from urllib.parse import urlparse
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -22,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 def _approval_router(state: dict) -> str:
-    if state.get("approval_status") == "rejected":
+    if state.get("approval_status") in ("rejected", "escalated", "denied"):
         return END
     return "execute"
 
@@ -43,32 +41,18 @@ def _verify_router(state: dict) -> str:
     return "remediation"
 
 
-def _tcp_reachable(dsn: str) -> bool:
-    try:
-        parts = urlparse(dsn if "://" in dsn else f"postgres://{dsn}")
-        socket.create_connection((parts.hostname, parts.port or 5432), timeout=0.5).close()
-        return True
-    except OSError:
-        return False
-
-
 def _build_checkpointer():
-    if os.getenv("OPSMIND_CHECKPOINTER", "auto") != "memory" and os.getenv("DATABASE_URL"):
-        if _tcp_reachable(os.getenv("DATABASE_URL")):
-            try:
-                import psycopg
-                from langgraph.checkpoint.postgres import PostgresSaver
+    dsn = os.getenv("DATABASE_URL", "").strip()
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is required (no memory fallback)")
+    import psycopg
+    from langgraph.checkpoint.postgres import PostgresSaver
 
-                conn = psycopg.connect(os.getenv("DATABASE_URL"), autocommit=True)
-                saver = PostgresSaver(conn)
-                saver.setup()
-                log.info("checkpointer: postgres")
-                return saver
-            except Exception as e:
-                log.warning(f"postgres checkpointer unavailable, using memory: {e}")
-    from langgraph.checkpoint.memory import InMemorySaver
-    log.info("checkpointer: in-memory")
-    return InMemorySaver()
+    conn = psycopg.connect(dsn, autocommit=True)
+    saver = PostgresSaver(conn)
+    saver.setup()
+    log.info("checkpointer: postgres")
+    return saver
 
 
 _builder = StateGraph(IncidentState)

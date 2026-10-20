@@ -3,7 +3,7 @@ import threading
 import time
 
 _lock = threading.Lock()
-_hits: dict = {}  # ip -> [unix timestamps]
+_hits: dict = {}
 _MAX_IPS = 1000
 
 

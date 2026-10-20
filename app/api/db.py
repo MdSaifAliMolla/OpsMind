@@ -6,9 +6,6 @@ log = logging.getLogger(__name__)
 
 _pool = None
 _pool_lock = threading.Lock()
-memory_store = {}
-memory_approvals = []
-_MAX_MEMORY = 1000
 
 
 def get_pool():
@@ -16,49 +13,39 @@ def get_pool():
     with _pool_lock:
         if _pool is not None:
             return _pool
-    if not os.getenv("DATABASE_URL"):
-        return None
-    try:
-        from psycopg2 import pool as pg_pool
-        with _pool_lock:
-            if _pool is None:
-                _pool = pg_pool.SimpleConnectionPool(1, 5, dsn=os.getenv("DATABASE_URL"))
-            return _pool
-    except Exception as e:
-        log.debug(f"db pool unavailable: {e}")
-        return None
+    dsn = os.getenv("DATABASE_URL", "").strip()
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is required (no memory fallback)")
+    from psycopg_pool import ConnectionPool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ConnectionPool(dsn, min_size=1, max_size=5, open=True)
+        return _pool
 
 
 def _exec(query, params=()):
     p = get_pool()
-    if p is None:
-        return
     conn = p.getconn()
     try:
         with conn.cursor() as cur:
             cur.execute(query, params)
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        log.debug(f"db write skipped: {e}")
+        raise
     finally:
         p.putconn(conn)
 
 
 def save_incident(row: dict):
-    if row.get("id"):
-        memory_store[row["id"]] = row
-        if len(memory_store) > _MAX_MEMORY:
-            try:
-                memory_store.pop(next(iter(memory_store)))
-            except StopIteration:
-                pass
     _exec(
-        """INSERT INTO incidents (id, service, environment, alert_type, description, severity, status)
-           VALUES (%s,%s,%s,%s,%s,%s,%s)
-           ON CONFLICT (id) DO UPDATE SET severity=EXCLUDED.severity, status=EXCLUDED.status""",
-        (row["id"], row["service"], row["environment"], row["alert_type"],
-         row.get("description", ""), row.get("severity"), row.get("status", "open")),
+        """INSERT INTO incidents (id, service, namespace, environment, alert_type, description, severity, status)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (id) DO UPDATE SET severity=EXCLUDED.severity, status=EXCLUDED.status,
+           namespace=EXCLUDED.namespace""",
+        (row["id"], row["service"], row.get("namespace") or "default", row["environment"],
+         row["alert_type"], row.get("description", ""), row.get("severity"),
+         row.get("status", "open")),
     )
 
 
@@ -93,23 +80,22 @@ def save_approval(incident_id: str, approver: str, approver_source: str,
     import hashlib
     import json
 
-    prev = ""
-    for row in reversed(memory_approvals):
-        if row.get("incident_id") == incident_id and row.get("row_hash"):
-            prev = row["row_hash"]
-            break
+    p = get_pool()
+    conn = p.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT row_hash FROM approvals WHERE incident_id=%s ORDER BY id DESC LIMIT 1",
+                (incident_id,),
+            )
+            r = cur.fetchone()
+            prev = r[0] if r and r[0] else ""
+    finally:
+        p.putconn(conn)
     payload = json.dumps({"prev": prev, "incident_id": incident_id,
                           "approver": approver, "plan_hash": plan_hash,
                           "decision": decision}, sort_keys=True)
     row_hash = hashlib.sha256(payload.encode()).hexdigest()[:16]
-    memory_approvals.append({
-        "incident_id": incident_id, "approver": approver[:64],
-        "approver_source": approver_source[:16], "plan_hash": plan_hash[:16],
-        "idempotency_key": (idempotency_key or "")[:64], "decision": decision[:16],
-        "prev_hash": prev, "row_hash": row_hash,
-    })
-    if len(memory_approvals) > _MAX_MEMORY:
-        del memory_approvals[:-_MAX_MEMORY]
     _exec(
         """INSERT INTO approvals
            (incident_id, approver, approver_source, plan_hash, idempotency_key,
@@ -135,40 +121,45 @@ def save_snapshot(incident_id: str, thread_id: str, state: dict):
 def load_snapshot(incident_id: str):
     import json
     p = get_pool()
-    if p is None:
-        return None
-    try:
-        conn = p.getconn()
-    except Exception:
-        return None
+    conn = p.getconn()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT thread_id, state FROM state_snapshots WHERE incident_id=%s",
                         (incident_id,))
             row = cur.fetchone()
         if not row:
-            return None
+            raise RuntimeError(f"snapshot not found: {incident_id}")
         raw = row[1]
         if isinstance(raw, dict):
             state = raw
         elif isinstance(raw, str):
-            try:
-                state = json.loads(raw)
-            except Exception:
-                return None
+            state = json.loads(raw)
         else:
-            return None
+            raise RuntimeError(f"snapshot corrupt: {incident_id}")
         if not isinstance(state, dict) or "incident" not in state:
-            return None
+            raise RuntimeError(f"snapshot corrupt: {incident_id}")
         return {"thread_id": row[0], "state": state}
     except Exception:
         try:
             conn.rollback()
         except Exception:
             pass
-        return None
+        raise
     finally:
-        try:
-            p.putconn(conn)
-        except Exception:
-            pass
+        p.putconn(conn)
+
+
+def list_incidents(limit: int = 100):
+    p = get_pool()
+    conn = p.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, service, namespace, environment, alert_type, description,"
+                " severity, status FROM incidents ORDER BY id LIMIT %s",
+                (limit,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    finally:
+        p.putconn(conn)

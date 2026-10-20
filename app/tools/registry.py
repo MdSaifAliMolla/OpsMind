@@ -9,8 +9,8 @@ def build_tools(incident: dict):
     @tool
     def query_metrics(metric: str) -> str:
         """Get a metric value for the incident service."""
-        from app.tools.prometheus import query_metric_synthetic
-        return json.dumps(query_metric_synthetic(incident, str(metric)[:64]))
+        from app.tools.prometheus import query_metric
+        return json.dumps(query_metric(incident, str(metric)[:64]))
 
     @tool
     def search_logs(query: str) -> str:

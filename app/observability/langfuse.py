@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()  # keys must resolve regardless of import order
+load_dotenv()
 
 log = logging.getLogger(__name__)
 

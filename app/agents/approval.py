@@ -10,8 +10,8 @@ ActionLiteral = Literal[
     "scale replicas",
     "restart redis",
     "rollback deployment",
-    "modify network policy",
     "delete database",
+    "escalate",
 ]
 
 
@@ -58,6 +58,8 @@ def _plan_valid(state: dict) -> bool:
 def approval_node(state: dict):
     if not _plan_valid(state):
         return {**mark("approval"), "approval_status": "rejected"}
+    if (state.get("remediation_plan") or {}).get("action") == "escalate":
+        return {**mark("approval"), "approval_status": "escalated"}
     if state.get("risk_level") == "forbidden":
         return {**mark("approval"), "approval_status": "rejected"}
     if _injection_suspected(state):

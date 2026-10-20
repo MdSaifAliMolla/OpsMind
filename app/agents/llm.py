@@ -2,7 +2,7 @@ import logging
 
 from dotenv import load_dotenv
 
-load_dotenv()  # so CLIs (eval) see .env without a server running
+load_dotenv()
 
 log = logging.getLogger(__name__)
 

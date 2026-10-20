@@ -15,7 +15,6 @@ latency_sum = 0.0
 latency_count = 0
 rag_queries = 0
 
-# LLM metrics
 llm_tokens = Counter()
 llm_calls_total = 0
 llm_errors_total = 0
@@ -26,7 +25,6 @@ eval_severity_accuracy = 0.0
 eval_rca_accuracy = 0.0
 eval_last_unix = 0.0
 
-# per-1M pricing (USD)
 MODEL_PRICING = {
     "gemini-3.5-flash-lite": (0.07, 0.28),
     "gemini-2.0-flash": (0.10, 0.40),

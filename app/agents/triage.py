@@ -1,10 +1,16 @@
 from app.agents.state import mark
-from app.ml.classifier import predict_severity, rule_based
+from app.ml.classifier import rule_based
+from app.ml.family import predict_family
 from app.ml.features import DEFAULTS
+from app.policy.severity import from_label
 
 
 def triage_node(state: dict):
     incident = state.get("incident") or {}
+    claimed = from_label(incident.get("severity"))
+    if claimed is not None:
+        return {**mark("triage"), "severity": claimed,
+                "severity_source": "alert", "fault_family": None}
     m = incident.get("metrics") or {}
     features = {
         "error_rate": m.get("error_rate", DEFAULTS["error_rate"]),
@@ -18,8 +24,10 @@ def triage_node(state: dict):
         "redis_up": m.get("redis_up", DEFAULTS["redis_up"]),
         "pods_ready": m.get("pods_ready", DEFAULTS["pods_ready"]),
     }
+    severity = rule_based(features)
     try:
-        severity = predict_severity(features)
+        family = predict_family(features)
     except Exception:
-        severity = rule_based(features)
-    return {**mark("triage"), "severity": severity}
+        family = None
+    return {**mark("triage"), "severity": severity,
+            "severity_source": "rules", "fault_family": family}

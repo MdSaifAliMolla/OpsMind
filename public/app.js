@@ -1,17 +1,17 @@
 const list = document.getElementById("list");
 const detail = document.getElementById("detail");
-const pick = document.getElementById("incidentPick");
-const fireBtn = document.getElementById("fireBtn");
 const fireStatus = document.getElementById("fireStatus");
-document.getElementById("refreshBtn").onclick = () => { refreshList(); if (openId) show(openId, true); };
+const refreshBtn = document.getElementById("refreshBtn");
+const healthDot = document.getElementById("healthDot");
+const healthText = document.getElementById("healthText");
 
+refreshBtn.onclick = () => { refreshList(); if (openId) show(openId, true); };
 let openId = null;
 const ALL_NODES = ["triage", "observability", "rag", "rca", "remediation", "approval", "execute", "verify"];
 
 function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function apiHeaders(extra) {
@@ -19,95 +19,198 @@ function apiHeaders(extra) {
   try {
     const k = localStorage.getItem("opsmind_api_key");
     if (k) h["X-API-Key"] = k;
-  } catch (_) { /* private mode */
-  }
+  } catch (e) {}
   return h;
 }
 
-async function loadSamples() {
-  const ids = [];
-  for (let i = 1; i <= 12; i++) ids.push("incident_" + String(i).padStart(3, "0"));
-  pick.innerHTML = ids.map((id) => `<option>${esc(id)}</option>`).join("");
+function sevPill(s) {
+  const c = { P1: "p1", P2: "p2", P3: "p3", P4: "p4" }[s] || "p4";
+  return `<span class="pill ${c}">${esc(s ?? "?")}</span>`;
+}
+
+const statusById = {};
+
+function statusPill(st) {
+  const m = {
+    resolved: "st-ok", healthy: "st-ok", approved: "st-ok", auto_approved: "st-ok",
+    awaiting_human: "st-wait", investigating: "st-wait", remediating: "st-wait",
+    denied: "st-bad", failed: "st-bad", rejected: "st-bad", expired: "st-bad",
+    unhealthy: "st-bad",
+    escalated: "st-info",
+  };
+  return `<span class="pill ${m[st] || "st-idle"}">${esc(st ?? "?")}</span>`;
+}
+
+async function health() {
+  try {
+    const h = await fetch("/health").then((r) => r.json());
+    healthDot.classList.toggle("down", !h.ok);
+    healthText.textContent = h.ok ? `live · ${h.pending ?? 0} paused` : "unhealthy";
+  } catch (e) {
+    healthDot.classList.add("down");
+    healthText.textContent = "unreachable";
+  }
 }
 
 async function refreshList() {
   const res = await fetch("/incidents", { headers: apiHeaders() }).then((r) => r.json()).catch(() => []);
-  const rows = Array.isArray(res) ? res : [];
-  list.innerHTML = "<h3>Investigated</h3>" + (rows.length === 0
-    ? `<p class="muted">Nothing yet. Fire one above.</p>`
-    : rows.map((r) => `<div class="card"><b>${esc(r.id)}</b> <span class="pill ${r.severity === "P1" ? "p1" : "p2"}">${esc(r.severity ?? "")}</span><br/><span class="muted">${esc(r.service)} · ${esc(r.status)}</span><br/><button data-id="${esc(r.id)}">Open</button></div>`).join(""));
-  list.querySelectorAll("button").forEach((b) => (b.onclick = () => { openId = b.dataset.id; show(openId); }));
+  const items = Array.isArray(res) ? res : [];
+  for (const k of Object.keys(statusById)) delete statusById[k];
+  for (const it of items) statusById[it.id] = it.status || "";
+  let html = `<h4 style="margin-top:0">Investigated (${items.length})</h4>`;
+  if (!items.length) {
+    html += `<p class="muted">Nothing yet. Fire one above.</p>`;
+  }
+  for (const it of items.slice().reverse()) {
+    const st = it.status || "";
+    html += `<div class="listitem${openId === it.id ? " active" : ""}" data-id="${esc(it.id)}">
+      <div><div class="id">${esc(it.id)}</div>
+      <div class="meta">${esc(it.service || "")} · ${esc(it.namespace || "default")} · ${esc(it.severity || "?")}</div></div>
+      <div>${statusPill(st)}</div></div>`;
+  }
+  list.innerHTML = html;
+  list.querySelectorAll(".listitem").forEach((el) => {
+    el.onclick = () => { openId = el.dataset.id; refreshList(); show(openId); };
+  });
 }
 
-function traceHtml(trace) {
-  const ran = new Set((trace ?? []).map((t) => t.node));
-  // execute/verify run only after approval; approval rendered as waiting when paused there
+function traceHtml(trace, status) {
+  const ran = new Set((trace || []).map((t) => t.node));
   const waiting = ran.has("approval") && !ran.has("execute");
+  const dead = status === "denied" || status === "failed" || status === "rejected";
+  const info = status === "escalated";
   return `<div class="steps">` + ALL_NODES.map((n) => {
-    const cls = ran.has(n) ? (n === "approval" && waiting ? "step wait" : "step done") : "step";
-    const at = (trace ?? []).find((t) => t.node === n)?.at?.slice(11, 19) ?? "";
-    return `<span class="${cls}" title="${esc(at)}">${esc(n)}${at ? `<br/><span class="muted">${esc(at)}</span>` : ""}</span>`;
+    let cls = "step";
+    if (ran.has(n)) cls += dead && n === "approval" ? " dead" : info && n === "approval" ? " info" : " done";
+    else if (waiting && n === "execute") cls += " wait";
+    const at = (trace || []).find((t) => t.node === n);
+    const tip = at ? ` title="${esc(at.at || "")}"` : "";
+    return `<span class="${cls}"${tip}>${esc(n)}</span>`;
   }).join("") + `</div>`;
 }
 
 function hypothesesHtml(hyps, rootCause) {
-  return (hyps ?? []).map((h) => `
-    <div class="hyp ${h.root_cause === rootCause ? "top" : ""}">
-      <b>${esc(h.root_cause)}</b> <span class="muted">${Math.round(Number(h.confidence ?? 0) * 100)}%</span><br/>
-      <span class="muted">for: ${esc((h.supporting ?? []).join("; ") || "—")}</span><br/>
-      <span class="muted">against: ${esc((h.contradicting ?? []).join("; ") || "—")}</span>
-    </div>`).join("");
+  if (!hyps || !hyps.length) return `<p class="muted">No hypotheses recorded.</p>`;
+  return hyps.map((h) => {
+    const top = h.root_cause === rootCause ? " top" : "";
+    const conf = typeof h.confidence === "number" ? ` · ${Math.round(h.confidence * 100)}%` : "";
+    return `<div class="hyp${top}"><b>${esc(h.root_cause)}</b><span class="conf">${esc(conf)}</span><br/>`
+      + `<span class="muted">+ ${(h.supporting || []).map(esc).join("; ")}</span><br/>`
+      + `<span class="muted">− ${(h.contradicting || []).map(esc).join("; ")}</span></div>`;
+  }).join("");
+}
+
+function guidanceHtml(evidence) {
+  const notes = (evidence || []).filter((e) => e && e.source === "human:guidance");
+  if (!notes.length) return "";
+  return `<h4>Human guidance</h4>` + notes.map((e) => {
+    const t = typeof e.result === "string" ? e.result : (e.result && e.result.text) || JSON.stringify(e.result ?? "");
+    return `<p class="mono" style="border-left:3px solid var(--ink);padding-left:0.6rem">${esc(t)}</p>`;
+  }).join("");
 }
 
 async function show(id, quiet) {
   const s = await fetch("/incidents/" + encodeURIComponent(id), { headers: apiHeaders() }).then((r) => (r.ok ? r.json() : null));
   if (!s) { if (!quiet) detail.innerHTML = `<p class="muted">Incident not found.</p>`; return; }
-  const needsApproval = s.approval_status === "awaiting_human";
+  const st = s.approval_status || "";
+  const needsDecision = st === "awaiting_human" || statusById[id] === "unhealthy";
   const v = s.verification_result;
   const plan = s.remediation_plan ?? {};
-  const confPct = Math.max(0, Math.min(100, Math.round((Number(s.confidence ?? 0)) * 100)));
+  const params = plan.params ?? {};
+  const conf = Math.max(0, Math.min(100, Math.round(Number(s.confidence ?? 0) * 100)));
+  const barCls = conf >= 80 ? "bar highc" : conf >= 50 ? "bar" : "bar lowc";
+
+  let actionBlock = "";
+  if (st === "escalated") {
+    actionBlock = `<div class="esc"><h4>Escalated — needs a human engineer</h4>
+      <p>The agent could not fix this safely. Its best estimate:</p>
+      <p><b>Estimated cause:</b> ${esc(s.root_cause ?? "—")}</p>
+      <p><b>Suggested fix:</b> ${esc(params.suggested_fix ?? plan.action ?? "—")}</p>
+      ${params.reason ? `<p class="muted">${esc(params.reason)}</p>` : ""}
+      <p class="muted">Full evidence bundle below — no action was executed.</p></div>`;
+  } else if (st === "denied") {
+    actionBlock = `<div class="deniedbox"><h4 style="margin-top:0;color:var(--red)">Denied</h4>
+      <p class="muted" style="margin:0">Fix rejected${s.denied_by ? ` by ${esc(s.denied_by)}` : ""}`
+      + `${s.deny_reason ? `: ${esc(s.deny_reason)}` : ""}. Nothing was executed.</p></div>`;
+  } else {
+    actionBlock = `<p><b>Fix:</b> ${esc(plan.action ?? "—")} `
+      + `<span class="pill ${s.risk_level === "low" ? "low" : s.risk_level === "medium" ? "med" : "high"}">${esc(s.risk_level ?? "")}</span> `
+      + `<span class="muted mono">${esc(params && Object.keys(params).length ? JSON.stringify(params) : "")}</span></p>`
+      + `<p class="muted">Approval: ${esc(st)}${s.approved_by ? ` by ${esc(s.approved_by)}` : ""}</p>`;
+  }
+
   detail.innerHTML = `
     <div class="card">
-      <h3>${esc(s.incident?.incident_id)} <span class="pill ${s.severity === "P1" ? "p1" : "p2"}">${esc(s.severity)}</span></h3>
-      <p class="muted">${esc(s.incident?.service)} · ${esc(s.incident?.alert_type)}</p>
-      ${traceHtml(s.trace)}
+      <h3>${esc(s.incident?.incident_id)} ${sevPill(s.severity)} ${statusPill(st)}</h3>
+      <p class="muted">${esc(s.incident?.service)} · ${esc(s.incident?.namespace ?? "default")} · ${esc(s.incident?.alert_type)}</p>
+      ${traceHtml(s.trace, st)}
       <p><b>Root cause:</b> ${esc(s.root_cause ?? "—")}</p>
-      <div class="bar"><div style="width:${confPct}%"></div></div>
-      <p><b>Fix:</b> ${esc(plan.action ?? "—")} <span class="pill ${s.risk_level === "low" ? "low" : "med"}">${esc(s.risk_level ?? "")}</span>
-      <span class="muted">${esc(plan.params ? JSON.stringify(plan.params) : "")}</span></p>
-      <p class="muted">Approval: ${esc(s.approval_status)}${s.approved_by ? ` by ${esc(s.approved_by)}` : ""}</p>
-      ${needsApproval ? `<button id="approveBtn">Approve & execute</button>` : ""}
-      ${v ? `<p><b>Verification:</b> error ${esc(v.before)} &rarr; ${esc(v.after)} — ${v.healthy ? "healthy" : "still failing"}</p>` : `<p class="muted">Not executed yet.</p>`}
+      <div class="${barCls}"><div style="width:${conf}%"></div></div>
+      ${actionBlock}
+      ${needsDecision ? `
+        <label class="lbl" for="noteInput">Note for the agent (optional — sent back for one more RCA round on deny)</label>
+        <textarea id="noteInput" placeholder="e.g. check the database, not the frontend"></textarea>
+        <div class="btnrow">
+          <button id="approveBtn">Approve &amp; execute</button>
+          <button id="denyBtn" class="danger">Deny</button>
+        </div>` : ""}
+      ${v ? `<h4>Verification</h4><p class="verify">error ${esc(v.before)} &rarr; ${esc(v.after)} —
+        ${v.healthy ? `<span class="good">healthy</span>` : `<span class="bad">still failing</span>`}</p>`
+        : `<p class="muted">Not executed yet.</p>`}
+      ${s.postmortem ? `<h4>Postmortem</h4><pre>${esc(s.postmortem)}</pre>` : ""}
       <h4>Hypotheses</h4>
       ${hypothesesHtml(s.hypotheses, s.root_cause)}
+      ${guidanceHtml(s.evidence)}
       <h4>Evidence (${(s.evidence ?? []).length})</h4>
       <pre>${esc(JSON.stringify((s.evidence ?? []).slice(0, 4), null, 2))}</pre>
     </div>`;
-  const btn = document.getElementById("approveBtn");
-  if (btn) btn.onclick = async () => {
-    btn.disabled = true;
+
+  const noteVal = () => (document.getElementById("noteInput")?.value || "").trim().slice(0, 1000);
+
+  const approveBtn = document.getElementById("approveBtn");
+  if (approveBtn) approveBtn.onclick = async () => {
+    approveBtn.disabled = true;
     try {
       const body = { approved_by: "dashboard" };
+      const note = noteVal();
+      if (note) body.note = note;
       const h = await planHash(s.remediation_plan).catch(() => null);
       if (h) body.plan_hash = h;
       const headers = apiHeaders();
       headers["X-Approver"] = "dashboard";
       const r = await fetch(`/incidents/${encodeURIComponent(id)}/approve`, { method: "POST", headers, body: JSON.stringify(body) });
       if (!r.ok) {
-        const detail = await r.json().catch(() => ({}));
-        fireStatus.textContent = `approve failed: ${r.status} ${detail.detail ?? ""}`.trim();
-      }
+        const d = await r.json().catch(() => ({}));
+        fireStatus.textContent = `approve failed: ${r.status} ${d.detail ?? ""}`.trim();
+      } else { fireStatus.textContent = ""; }
     } catch (e) {
       fireStatus.textContent = `approve failed: ${e}`;
     }
     refreshList();
     show(id);
   };
+
+  const denyBtn = document.getElementById("denyBtn");
+  if (denyBtn) denyBtn.onclick = async () => {
+    denyBtn.disabled = true;
+    try {
+      const r = await fetch(`/incidents/${encodeURIComponent(id)}/deny`,
+        { method: "POST", headers: apiHeaders(), body: JSON.stringify({ denied_by: "dashboard", note: noteVal() || null }) });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        fireStatus.textContent = `deny failed: ${r.status} ${d.detail ?? ""}`.trim();
+      } else {
+        const d = await r.json().catch(() => ({}));
+        fireStatus.textContent = d.rerun ? "note sent — agent re-investigating…" : "denied.";
+      }
+    } catch (e) {
+      fireStatus.textContent = `deny failed: ${e}`;
+    }
+    refreshList();
+    show(id);
+  };
 }
 
-// plan_hash parity with server (sha256 of JSON with sorted keys, ", "/": " separators, first 16 hex).
-// Best-effort: crypto.subtle needs a secure context; without it we omit plan_hash
-// and the server approves without binding (still logged in the audit trail).
 function stableStringify(v) {
   if (v === null || typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return "[" + v.map(stableStringify).join(", ") + "]";
@@ -121,25 +224,81 @@ async function planHash(plan) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
-fireBtn.onclick = async () => {
-  fireBtn.disabled = true;
-  fireStatus.textContent = "investigating…";
-  try {
-    const id = pick.value;
-    const demo = await fetch(`/demo/${encodeURIComponent(id)}.json`, { headers: apiHeaders() }).then((r) => (r.ok ? r.json() : null));
-    const body = demo ?? { incident_id: id, service: "payment-api", environment: "production", alert_type: "db_pool_exhaustion", metrics: { error_rate: 0.28 } };
-    const out = await fetch("/incidents", { method: "POST", headers: apiHeaders(), body: JSON.stringify(body) }).then((r) => r.json());
-    fireStatus.textContent = `done: ${out.root_cause ?? out.detail ?? out.error ?? "see list"}`;
-    fireBtn.disabled = false;
-    openId = out.incident?.incident_id ?? null;
-    refreshList();
-    if (openId) show(openId);
-  } catch (e) {
-    fireStatus.textContent = `failed: ${e}`;
-    fireBtn.disabled = false;
-  }
-};
+const metricsStrip = document.getElementById("metricsStrip");
+const costSpark = document.getElementById("costSpark");
+const sparkCost = [];
+const sparkSuccess = [];
 
-loadSamples();
+function metricVal(text, name, labels) {
+  const lines = text.split("\n");
+  for (const ln of lines) {
+    if (!ln.startsWith(name + "{") && ln !== name && !ln.startsWith(name + " ")) continue;
+    if (labels && !ln.includes(labels)) continue;
+    const m = ln.trim().split(/\s+/);
+    const v = parseFloat(m[m.length - 1]);
+    if (!isNaN(v)) return v;
+  }
+  return null;
+}
+
+function fmtUSD(v) { return v == null ? "—" : "$" + v.toFixed(4); }
+function fmtPct(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; }
+function fmtInt(v) { return v == null ? "—" : String(Math.round(v)); }
+
+function drawSpark() {
+  if (!costSpark || !costSpark.getContext) return;
+  const ctx = costSpark.getContext("2d");
+  const W = costSpark.width, H = costSpark.height;
+  ctx.clearRect(0, 0, W, H);
+  const series = [sparkCost, sparkSuccess];
+  const colors = ["#161616", "#9a9a9a"];
+  series.forEach((data, si) => {
+    if (data.length < 2) return;
+    const mx = Math.max(...data, 1e-9);
+    ctx.strokeStyle = colors[si];
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = (i / (data.length - 1)) * (W - 4) + 2;
+      const y = H - 4 - (v / mx) * (H - 10);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  });
+}
+
+async function refreshMetrics() {
+  let text = "";
+  try {
+    text = await fetch("/metrics", { headers: apiHeaders() }).then((r) => r.text());
+  } catch (e) {}
+  if (!text) return;
+  let toks = 0;
+  for (const ln of text.split("\n")) {
+    if (ln.startsWith("opsmind_llm_tokens_total{")) {
+      const v = parseFloat(ln.trim().split(/\s+/).pop());
+      if (!isNaN(v)) toks += v;
+    }
+  }
+  const cost = metricVal(text, "opsmind_llm_cost_usd_total");
+  const calls = metricVal(text, "opsmind_llm_calls_total");
+  const errs = metricVal(text, "opsmind_llm_errors_total");
+  const succ = metricVal(text, "opsmind_agent_success_rate");
+  const sev = metricVal(text, "opsmind_eval_severity_accuracy");
+  const rca = metricVal(text, "opsmind_eval_rca_accuracy");
+  metricsStrip.innerHTML =
+    `<div class="metric"><div class="k">LLM cost</div><div class="v">${fmtUSD(cost)}</div></div>` +
+    `<div class="metric"><div class="k">Tokens</div><div class="v">${fmtInt(toks)}</div></div>` +
+    `<div class="metric"><div class="k">LLM calls</div><div class="v">${fmtInt(calls)}</div></div>` +
+    `<div class="metric"><div class="k">LLM errors</div><div class="v">${fmtInt(errs)}</div></div>` +
+    `<div class="metric"><div class="k">Success rate</div><div class="v">${fmtPct(succ)}</div></div>` +
+    `<div class="metric"><div class="k">Eval sev / RCA</div><div class="v">${fmtPct(sev)} / ${fmtPct(rca)}</div></div>`;
+  if (cost != null) { sparkCost.push(cost); if (sparkCost.length > 40) sparkCost.shift(); }
+  if (succ != null) { sparkSuccess.push(succ); if (sparkSuccess.length > 40) sparkSuccess.shift(); }
+  drawSpark();
+}
+
+health();
 refreshList();
-setInterval(() => { refreshList(); }, 15000);
+refreshMetrics();
+setInterval(() => { refreshList(); health(); refreshMetrics(); if (openId) show(openId, true); }, 15000);

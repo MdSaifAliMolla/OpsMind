@@ -1,10 +1,12 @@
 import json
+import logging
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.llm import content_to_text, invoke_tracked
 from app.agents.state import mark
+from app.policy.faults import normalize_family
 from app.security.untrusted import (
     PROMPT_RULE,
     build_wrapped_evidence_text,
@@ -12,11 +14,16 @@ from app.security.untrusted import (
     scan_state_for_injection,
 )
 
+log = logging.getLogger(__name__)
+
 SYSTEM = ("You are an SRE root-cause-analysis agent. Given evidence (metrics, logs, deployment "
           "history, runbook excerpts), propose 2-3 competing hypotheses for the root cause. For each, "
-          "list supporting and contradicting evidence, then assign a confidence score 0-1. Respond ONLY "
-          'as JSON: {"hypotheses": [{"root_cause": str, "supporting": [str], "contradicting": [str], '
-          '"confidence": float}]}'
+          "list supporting and contradicting evidence, then assign a confidence score 0-1. Also name "
+          "the single best fault_family (one of: bad_deploy, oom_crashloop, cpu_starvation, "
+          "pod_kill_storm, dependency_down, network_delay — or the observed failure type) and the "
+          "affected service. Respond ONLY as JSON: "
+          '{"hypotheses": [{"root_cause": str, "supporting": [str], "contradicting": [str], '
+          '"confidence": float}], "fault_family": str, "service": str}'
           f"\n\n{PROMPT_RULE}")
 
 
@@ -53,14 +60,25 @@ def rca_node(state: dict):
     evidence_text = build_wrapped_evidence_text(incident, evidence)
     alert = str(incident.get("alert_type", "unknown"))[:128]
     service = str(incident.get("service", "unknown"))[:128]
+    guidance = str(incident.get("human_guidance", "") or "")[:1000]
+    human_block = (f"\n\nHuman reviewer guidance (trusted, weigh it heavily): "
+                   f"{guidance}") if guidance else ""
+    prior = state.get("fault_family")
+    prior_block = (f"\n\nDetector prior fault family: {prior} (advisory — "
+                   f"overrule it if the evidence disagrees).") if prior else ""
     try:
         res = invoke_tracked([
             SystemMessage(content=SYSTEM),
             HumanMessage(content=f"Incident: {alert} on "
-                                 f"{service}\n\nEvidence:\n{evidence_text}"),
+                                 f"{service}\n\nEvidence:\n{evidence_text}"
+                                 f"{prior_block}{human_block}"),
         ], where="rca")
         text = content_to_text(res.content)
-        hyps = extract_json(text)["hypotheses"]
+        parsed = extract_json(text)
+        hyps = parsed["hypotheses"]
+        family = normalize_family(parsed.get("fault_family"))
+        if family is None:
+            log.debug(f"unknown fault_family: {str(parsed.get('fault_family'))[:100]!r}")
     except Exception as e:
         raise RuntimeError(f"rca llm call failed: {e}") from e
     if not isinstance(hyps, list) or not hyps:
@@ -84,7 +102,7 @@ def rca_node(state: dict):
     hyps = cleaned
     hyps.sort(key=lambda h: h["confidence"], reverse=True)
     out = {**mark("rca"), "hypotheses": hyps, "confidence": hyps[0]["confidence"],
-           "root_cause": hyps[0]["root_cause"],
+           "root_cause": hyps[0]["root_cause"], "fault_family": family,
            "investigation_loops": state.get("investigation_loops", 0) + 1}
     if injected or state.get("injection_suspected"):
         out["injection_suspected"] = True

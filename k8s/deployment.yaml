@@ -30,14 +30,26 @@ spec:
           env:
             - name: DATABASE_URL
               valueFrom:
-                secretKeyRef: { name: opsmind-secrets, key: DATABASE_URL, optional: true }
+                secretKeyRef: { name: opsmind-secrets, key: DATABASE_URL, optional: false }
             - name: GOOGLE_API_KEY
               valueFrom:
-                secretKeyRef: { name: opsmind-secrets, key: GOOGLE_API_KEY, optional: true }
+                secretKeyRef: { name: opsmind-secrets, key: GOOGLE_API_KEY, optional: false }
             - name: QDRANT_URL
-              value: http://qdrant:6333
-            - name: OPSMIND_CHECKPOINTER
-              value: auto
+              value: http://opsmind-qdrant:6333
+            - name: PROMETHEUS_URL
+              value: http://kps-kube-prometheus-stack-prometheus.monitoring:9090
+            - name: LOKI_URL
+              value: http://loki.logging:3100
+            - name: JAEGER_URL
+              value: http://jaeger.logging:16686
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://jaeger.logging:4317
+            - name: OPSMIND_NAMESPACE
+              value: opsmind
+            - name: OPSMIND_EXECUTE
+              value: "true"
+            - name: GEMINI_MODEL
+              value: gemini-3.5-flash-lite
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -54,7 +66,6 @@ spec:
   selector: { app: opsmind-api }
   ports: [{ port: 4000, targetPort: 4000 }]
 ---
-# replicas >1 needs Postgres checkpointer; memory mode needs single replica
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

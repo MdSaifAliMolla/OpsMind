@@ -37,7 +37,7 @@ def render(results_path: str) -> str:
     costs = cost_stats(rows)
 
     lines = [
-        "# Eval REPORT (Phase 4)",
+        "# Eval Report",
         "",
         f"Source: `{results_path}` — n={n}, "
         f"severity {sev:.1%}, RCA {rca:.1%} (gates: 70% / 60%).",

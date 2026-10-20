@@ -1,0 +1,9 @@
+dependencies:
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 15.5.8
+- name: qdrant
+  repository: https://qdrant.github.io/qdrant-helm
+  version: 0.9.1
+digest: sha256:1e05ddec83f89d7886075dceb19cacadb8c6e68a6b401ea10a443dd1e0803369
+generated: "2026-10-09T18:50:37.539727355Z"

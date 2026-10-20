@@ -94,7 +94,7 @@ def build_incident(case: str):
         "service": service,
         "environment": "production",
         "alert_type": "rcaeval_anomaly",
-        "description": f"RCAEval case {case}",
+        "description": f"anomaly detected on {service}, cause under investigation",
         "metrics": {
             "error_rate": error_rate,
             "p95_latency_ms": round(abn("latency-90") * 1000, 1),

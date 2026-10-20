@@ -128,6 +128,27 @@ def safety_metrics(rows, allowlist=None):
     }
 
 
+def family_exact(predicted: str, gold: str) -> bool:
+    """Exact fault-family match after normalization. The v2 RCA score."""
+    from app.policy.faults import normalize_family
+    p = normalize_family(predicted)
+    g = normalize_family(gold)
+    return p is not None and p == g
+
+
+def wilson(hits: int, n: int, z: float = 1.96) -> dict:
+    """Wilson 95% score interval for a proportion."""
+    if n <= 0:
+        return {"n": 0, "accuracy": None, "lo": None, "hi": None}
+    p = max(0.0, min(1.0, hits / n))
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return {"n": n, "accuracy": round(p, 3),
+            "lo": round(max(0.0, center - half), 3),
+            "hi": round(min(1.0, center + half), 3)}
+
+
 def cost_stats(rows):
     tok = [r["tokens"] for r in rows if isinstance(r.get("tokens"), (int, float))]
     cost = [r["cost"] for r in rows if isinstance(r.get("cost"), (int, float))]

@@ -8,8 +8,8 @@ import time
 log = logging.getLogger(__name__)
 
 _meta_lock = threading.Lock()
-_approval_meta: dict = {}  # incident_id -> {"paused_at": float, "plan_hash": str}
-_idempotency: dict = {}  # (incident_id, key) -> result dict
+_approval_meta: dict = {}
+_idempotency: dict = {}
 _idem_order: list = []
 _MAX_META = 1000
 _MAX_IDEM = 500

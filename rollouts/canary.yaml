@@ -1,6 +1,3 @@
-# Progressive delivery with Argo Rollouts (canary 25% -> 50% -> 100%).
-# Install controller once: kubectl apply -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
-# Then replace the Helm Deployment with this Rollout (same labels/selectors).
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
@@ -17,7 +14,7 @@ spec:
       serviceAccountName: opsmind
       containers:
         - name: api
-          image: ghcr.io/YOU/opsmind-api:latest
+          image: ghcr.io/mdsaifalimolla/opsmind-api:latest
           ports: [{ containerPort: 4000 }]
           readinessProbe:
             httpGet: { path: /health, port: 4000 }
@@ -35,7 +32,6 @@ spec:
         - pause: { duration: 2m }
         - setWeight: 100
 ---
-# AnalysisTemplate: auto-rollback if success rate or eval drops during canary.
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:

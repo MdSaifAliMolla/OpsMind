@@ -1,531 +1,563 @@
-# OpsMind — Autonomous Incident-Response Agent
+# OpsMind
 
-![ci-cd](https://github.com/MdSaifAliMolla/OpsMind/actions/workflows/ci-cd.yml/badge.svg)
+**An autonomous incident-response agent for Kubernetes — evidence-driven, policy-bounded, and human-gated.**
 
-OpsMind is an on-call engineer in software. Hand it an infrastructure alert, and it
-figures out what's wrong, proposes a fix, waits for approval, applies it, checks
-that it actually worked, and writes the postmortem. The whole thing runs on Kubernetes
-with real observability.
+[![ci-cd](https://github.com/MdSaifAliMolla/OpsMind/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/MdSaifAliMolla/OpsMind/actions/workflows/ci-cd.yml)
+
+OpsMind receives alerts from Alertmanager, investigates the affected service across
+Prometheus, Loki, Jaeger, and the Kubernetes API, retrieves relevant runbooks and
+prior postmortems, and produces a ranked root-cause analysis with a concrete
+remediation plan. Low-risk actions can run automatically; medium- and high-risk
+actions pause the incident graph until a human approves the exact plan that was
+proposed. Resolved incidents generate postmortems that are fed back into the
+retrieval corpus.
+
+The system is built as a production-shaped reference implementation: checkpointed
+workflows, explicit trust boundaries, an evaluation harness, infrastructure as
+code, and a GitOps delivery path.
+
+> **Status:** active engineering prototype. The agent is evaluated on a generated
+> incident corpus and on recorded chaos bundles, not on production traffic. See
+> [Evaluation](#evaluation) and [Limitations](#limitations).
+
+---
 
 ## Contents
 
-- [How it works](#how-it-works)
-- [Results](#results)
-- [Try it](#try-it)
-- [Full stack with Docker Compose](#full-stack-with-docker-compose)
-- [Live end-to-end demo](#live-end-to-end-demo)
-- [API reference](#api-reference)
-- [Configuration](#configuration)
+- [Capabilities](#capabilities)
 - [Architecture](#architecture)
-- [Agent in detail](#agent-in-detail)
-- [RAG in detail](#rag-in-detail)
-- [ML in detail](#ml-in-detail)
-- [Evaluation](#evaluation)
-- [Observability](#observability)
+- [Incident lifecycle](#incident-lifecycle)
+- [Agent graph](#agent-graph)
+- [Retrieval pipeline](#retrieval-pipeline)
 - [Safety model](#safety-model)
-- [CI/CD and deploy](#cicd-and-deploy)
-- [Project layout](#project-layout)
-- [Tests](#tests)
-- [Troubleshooting](#troubleshooting)
-- [FAQ](#faq)
-- [What's next](#whats-next)
+- [Evaluation](#evaluation)
+- [Deployment](#deployment)
+- [Quick start](#quick-start)
+- [API](#api)
+- [Configuration](#configuration)
+- [Observability](#observability)
+- [Repository layout](#repository-layout)
+- [Design decisions](#design-decisions)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
 
-## How it works
+---
 
-An alert comes in through the API (or straight from Alertmanager), and then:
+## Capabilities
 
-1. **Triage** — an XGBoost model grades severity P1–P4. Simple tabular problem, so no
-   LLM needed here. Fast, cheap, testable.
-2. **Investigate** — the agent pulls metrics, logs, traces, and deployment history,
-   then searches the team's runbooks with RAG for matching cases.
-3. **Diagnose** — Gemini writes up 2–3 competing hypotheses with confidence scores.
-   If confidence is low, it goes back and digs for more evidence (up to 3 rounds).
-4. **Plan** — it picks a fix from a strict allowlist (restart, scale, rollback…) and
-   prices the risk. Anything destructive simply isn't on the list.
-5. **Approve** — low-risk fixes run on their own. Anything else pauses and waits for
-   a human to click approve in the dashboard. Approvals expire, are tied to the exact
-   plan reviewed, and every decision lands in an audit trail.
-6. **Execute & verify** — it applies the fix, re-reads the live error rate to prove
-   recovery, and drafts a postmortem.
-
-Every LLM call is metered (tokens, cost, latency) and traced, so there's a Grafana
-dashboard and a Langfuse trace for everything it does.
-
-A concrete example helps. Say `payment-api` starts timing out on connections. You (or
-Alertmanager) post the alert. Triage sees error_rate 0.28 with a saturated connection
-pool and grades it P1. The investigator finds `connection pool exhausted` in the logs,
-RAG surfaces the database runbook, and RCA comes back with "database connection pool
-exhaustion" at 0.9 confidence. The planner picks `rollback deployment` (the deploy
-went out 7 minutes ago — suspicious timing), marks it medium risk, and pauses. You
-click approve, it rolls back, the error rate drops from 0.28 to near zero, and you get
-a postmortem describing the whole thing. That's the entire thesis in one incident.
-
-## Results
-
-Measured with the built-in eval harness running the live agent (Gemini
-`gemini-3.5-flash-lite`, sequential mode):
-
-| | Severity accuracy | RCA accuracy |
-|---|---|---|
-| 131 synthetic incidents (111 known / 20 novel faults) | 98.5% | 68.7% |
-| Known faults | 98% | 67% |
-| Novel faults (never in runbooks) | 100% | 80% |
-
-Around those headline numbers, the harness also reports:
-
-- **Runbook retrieval hit@3: 78%** — how often the right runbook was in the top 3.
-  This is the RAG quality signal, and the most direct lever for lifting RCA.
-- **Remediation safety: allowlist match 100%, risk grading 82%** — it never invents
-  an action outside the allowlist, and usually prices the risk right.
-- **Cost: ~2828 tokens / ~$0.0003 / ~24s per incident.** Cheap enough to run the full
-  suite on the free tier if you shard it (more on that below).
-- **Calibration: ECE 0.220.** High-confidence calls (≥0.8) land at 66%, so the
-  re-investigation threshold wants tuning.
-
-CI gates on 70% severity / 60% RCA, plus a cost gate that fails if the average cost
-per incident jumps more than 25% over baseline.
-
-## Try it
-
-Python 3.11+ is required (3.13 works locally; Docker uses 3.11), plus a `GOOGLE_API_KEY`.
-That's it for the local path — no Docker, no cluster.
-
-```bash
-py -m venv .venv && .venv\Scripts\activate   # Windows; Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env    # Windows cmd: copy .env.example .env — then add your GOOGLE_API_KEY
-py data/generate_incidents.py --n 160
-py -m app.rag.ingest
-py -m app.ml.train
-py -m uvicorn app.api.server:app --port 4000
-```
-
-What each step does: `generate_incidents` writes 160 synthetic incidents (11 fault
-families, seeded, reproducible) into `data/incidents/`. `ingest` chunks the runbooks,
-embeds them, and writes the local vector store (plus Qdrant if it's up). `train`
-fits the XGBoost severity model with a small grid search and saves artifacts plus an
-MLflow run. The server warms the embedding model in the background, so the first
-incident takes ~30–60 seconds and everything after is fast.
-
-Then in another terminal:
-
-```bash
-curl -X POST localhost:4000/incidents -H "Content-Type: application/json" \
-  -d @data/incidents/incident_003/incident.json | py -m json.tool
-curl -X POST localhost:4000/incidents/incident_003/approve \
-  -H "Content-Type: application/json" -d '{"approved_by":"sam"}'
-```
-
-Dashboard at `http://localhost:4000`, ML metrics at `/metrics`, health at `/health`.
-
-No key? Triage and evidence collection still run (they don't need the LLM), but RCA
-and remediation will fail by design — there's deliberately no rules-engine fallback
-that pretends to reason. The API retries twice, then records the incident as failed
-rather than guessing.
-
-## Full stack with Docker Compose
-
-Twelve services: Postgres, Qdrant, MLflow, Prometheus, Alertmanager, Loki, Promtail,
-Jaeger, the OTel collector, Grafana, the API, and a demo checkout service you can
-break on purpose.
-
-```bash
-docker compose up -d postgres qdrant mlflow prometheus alertmanager loki promtail jaeger grafana
-docker exec -i $(docker compose ps -q postgres) psql -U opsmind -d opsmind < docker/init.sql
-docker compose up --build api demo
-```
-
-First boot is slow — the image bakes the embedding model in so runtime loads from
-cache instead of hitting HuggingFace. Watch `docker compose logs -f api` for the
-Uvicorn line. One gotcha: compose doesn't forward your host `.env` key into the API
-container automatically, so set `GOOGLE_API_KEY` in the `api` environment if you want
-real reasoning in compose.
-
-| Service | Port | What it's for |
-|---|---|---|
-| API / dashboard | 4000 | The agent itself |
-| Demo checkout | 8002 | The service you break |
-| Prometheus | 9090 | Scrapes the agent + demo, fires alert rules |
-| Alertmanager | 9093 | Webhooks firing alerts back into the agent |
-| Grafana | 3001 (admin/admin) | AI dashboard: tokens, cost, latency, success rate |
-| Jaeger | 16686 | OTel traces, one per incident |
-| Qdrant | 6333 | Runbook vectors |
-| MLflow | 5000 | Training runs + model registry |
-| Loki | 3100 | Log aggregation |
-
-## Live end-to-end demo
-
-The full loop takes about two minutes:
-
-1. `POST demo:8002/chaos/errors`, then send some traffic to `/checkout`. The demo's
-   error counter climbs.
-2. Prometheus fires `DemoHighErrors` (error rate over 10% for 30s). Alertmanager
-   webhooks the agent. An incident appears in the dashboard and the trace timeline
-   starts filling in as it investigates.
-3. It lands on a medium-risk fix like `rollback deployment` and pauses. The
-   dashboard shows the competing hypotheses, confidences, and the exact proposed plan.
-4. Click **Approve & execute**. It runs the fix (dry-run unless you set
-   `OPSMIND_EXECUTE=true` with a real cluster), re-reads the error rate to prove
-   recovery, and drafts the postmortem.
-5. Flip to Grafana for the money slide: tokens, cost, latency, success rate — plus
-   the Langfuse trace with a span per node.
-
-## API reference
-
-Base `http://localhost:4000`. The dashboard at `/` is a static page (no build step).
-If `OPSMIND_API_KEY` is set, send it as `X-API-Key` on the incident routes;
-`/health`, `/metrics`, and the dashboard stay open for probes and scrapes.
-
-| Method | Path | What it does |
-|---|---|---|
-| `GET` | `/health` | Liveness (`{ok, pending}`) |
-| `GET` | `/metrics` | Prometheus exposition: incidents, AI usage, eval scores |
-| `GET` | `/incidents` | List investigations (in-memory; Postgres holds the audit trail) |
-| `GET` | `/incidents/{id}` | Full live state, or the persisted snapshot after restart |
-| `POST` | `/incidents` | Submit an alert, get back the full investigation |
-| `POST` | `/incidents/{id}/approve` | Resume a paused fix with `{"approved_by":"sam"}` |
-| `POST` | `/incidents/alertmanager` | Alertmanager webhook; `resolved` alerts are skipped |
-
-Inputs are bounded everywhere: incident ids are alphanumeric plus dash/underscore,
-descriptions cap at 2000 chars, logs at 20 entries of 500 chars, metrics at 32 keys.
-Anything bigger gets trimmed before it can touch a prompt.
-
-Approvals have teeth. The dashboard sends a hash of the exact plan it displayed; if
-the plan changed since (mismatch), approval fails with 409 and the attempt is
-audited. Approvals older than the TTL (default 60 min) fail with 410 and the
-incident is marked expired. With `OPSMIND_REQUIRE_APPROVER=true`, the approver
-identity header is mandatory (401 without it). Double-clicks are safe — an
-idempotency key plus a per-incident lock means one approval runs the fix exactly
-once.
-
-## Configuration
-
-Everything lives in `.env` (copy `.env.example`, never commit real keys). The only
-one you truly need is `GOOGLE_API_KEY`; the rest have working defaults.
-
-| Variable | Default | What it does |
-|---|---|---|
-| `GOOGLE_API_KEY` | — | **Required** for RCA, remediation, postmortem. No fallback, by design |
-| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | The reasoning model; priced for cost math |
-| `DATABASE_URL` | local Postgres | Checkpoints + audit tables; unset → in-memory (loses resume on restart) |
-| `QDRANT_URL` | `localhost:6333` | Vector DB; unreachable → local cosine fallback, automatically |
-| `MLFLOW_TRACKING_URI` | `localhost:5000` | Empty → train locally, artifacts still written |
-| `PROMETHEUS_URL`, `LOKI_URL`, `JAEGER_URL` | localhost defaults | Real clients with short timeouts, synthetic/empty fallbacks |
-| `OPSMIND_EXECUTE` | `false` | `true` plus a reachable cluster → real kubectl patches; otherwise dry-run |
-| `OPSMIND_API_KEY` | — | Optional shared-secret auth on the incident routes |
-| `OPSMIND_APPROVAL_TTL_MIN` | `60` | Approval lifetime (`0` disables); `OPSMIND_REQUIRE_APPROVER` enforces identity |
-| `OPSMIND_RATE_LIMIT_PER_MIN` | `0` | Per-IP POST limit for public demos (`0` = off) |
-| `SLACK_WEBHOOK_URL` | — | P1 / approval-needed / executed pings; console log otherwise |
-| `LANGFUSE_*` | — | Tracing; unset → clean no-op, nothing breaks |
+| Area | What OpsMind does |
+|---|---|
+| **Ingestion** | Alertmanager webhook and a typed REST endpoint; alert windows are preserved for time-bounded log/trace queries. |
+| **Triage** | Severity from Alertmanager labels when present, otherwise documented burn-rate and health thresholds. A fault-family classifier supplies an advisory prior. |
+| **Investigation** | Read-only, per-incident tool calls against Prometheus, Loki, Jaeger, and Kubernetes, plus runbook retrieval. Tool scope is bound to the incident service. |
+| **Diagnosis** | 2–3 competing hypotheses with supporting/contradicting evidence and a confidence score. Low confidence loops back for another investigation pass (max 3). |
+| **Remediation** | A closed allowlist of actions with risk tiers. Plans carry a deterministic hash used to bind approvals to the reviewed plan. |
+| **Human control** | Approval TTL, approver identity option, idempotency keys, deny path, and an append-only audit trail. |
+| **Verification** | Post-action error-rate comparison and rollout health check. Failed recovery can re-plan once. |
+| **Learning** | Successful postmortems are chunked, embedded, and upserted into Qdrant so future investigations retrieve them. |
+| **Operations** | Prometheus metrics, Grafana dashboards, SLO burn-rate rules, Alertmanager routing, OpenTelemetry traces, Langfuse LLM traces, Slack-compatible notifications. |
+| **Delivery** | Docker Compose, raw Kubernetes manifests, Helm chart, ArgoCD application, kind cluster profiles, GitHub Actions with lint, eval gate, image build, and GitOps tag stamping. |
 
 ## Architecture
 
-The system has four layers: intake (FastAPI), brain (LangGraph), evidence (tools +
-vector DB), and proof (metrics, traces, eval). The key idea is that the graph can
-*pause in the middle* — the approval gate is structural, not a polite suggestion.
+```mermaid
+flowchart LR
+    subgraph Sources
+        AM[Alertmanager]
+        REST[POST /incidents]
+    end
 
-```text
-                          ┌─────────────┐
-                          │ Prometheus  │── alert rules (DemoHighErrors, OpsMind*)
-                          └──────┬──────┘
-                                 │ Alertmanager webhook
-                                 v
-┌──────────┐  POST /incidents   ┌──────────────────────────────────────────┐
-│ dashboard│───────────────────▶│ FastAPI: validate → run → persist        │
-│ (static) │  ◀──────────────── │ threads map + snapshots + audit trail    │
-└──────────┘  approve (hash)    └────────────────────┬─────────────────────┘
-                                                     │ LangGraph (checkpoints in Postgres)
-                                                     v
-                      ┌────────────────────────────────────────────────┐
-                      │ triage: XGBoost grades P1–P4 (no LLM)          │
-                      │ observability: LLM tool-loop + deterministic   │
-                      │   backfill (metrics, logs, deploys, traces)    │
-                      │ rag: top-3 runbook chunks → evidence           │
-                      │ rca: 2–3 hypotheses + confidence; loops back   │
-                      │   for more evidence while confidence < 0.8     │
-                      │ remediation: allowlisted fix + grounded params │
-                      │ approval: low → auto, medium/high → PAUSE ─/─ │
-                      │ execute → verify (error rate before vs after)  │
-                      └─────────┬──────────────────────┬───────────────┘
-                                │ LLM calls            │ evidence reads
-                                v                      v
-                   ┌─────────────────────┐  ┌──────────────────────────┐
-                   │ Gemini (metered:    │  │ Prometheus, Loki, Jaeger │
-                   │ tokens/cost/latency)│  │ Qdrant, k8s, Postgres    │
-                   └──────────┬──────────┘  └──────────────────────────┘
-                              │ traces + numbers
-                              v
-               ┌─────────────────────────────────────┐
-               │ Langfuse │ Jaeger │ Prometheus/Grafana │
-               └─────────────────────────────────────┘
+    subgraph ControlPlane["OpsMind control plane"]
+        API[FastAPI API + dashboard]
+        GRAPH[LangGraph incident graph]
+        CKPT[(Postgres checkpoints)]
+        VEC[(Qdrant)]
+        UI[Operator dashboard]
+    end
+
+    subgraph Evidence["Read-only evidence plane"]
+        PROM[Prometheus]
+        LOKI[Loki]
+        JAEGER[Jaeger]
+        K8SAPI[Kubernetes API]
+        RUNBOOKS[Runbooks + postmortems]
+    end
+
+    subgraph Action["Policy-bounded action plane"]
+        GATE{Approval gate}
+        EXEC[Remediation adapters]
+    end
+
+    AM --> API
+    REST --> API
+    API --> GRAPH
+    GRAPH <--> CKPT
+    GRAPH --> PROM
+    GRAPH --> LOKI
+    GRAPH --> JAEGER
+    GRAPH --> K8SAPI
+    GRAPH <--> VEC
+    RUNBOOKS --> VEC
+    GRAPH --> GATE
+    GATE -->|approved / auto-approved| EXEC
+    EXEC --> K8SAPI
+    API --> UI
+    GRAPH --> UI
 ```
 
-**Three paths through the graph.** Low-risk incidents auto-execute: the graph still
-pauses at the gate, but the wrapper sees `auto_approved` and resumes immediately, so
-it looks like one smooth run. Medium/high-risk incidents stop cold — state is
-checkpointed to Postgres, the dashboard shows the proposed fix with its evidence, and
-nothing moves until `POST /incidents/{id}/approve` resumes that exact thread. One
-resume equals one execution; if verification fails, it re-pauses and needs a fresh
-approval to retry (max 2 executions). Alertmanager alerts take a third path in:
-firing alerts are normalized (fingerprint → id, labels → service) and investigated
-exactly like hand-submitted ones.
+**Components**
 
-**State and memory.** Each node reads and writes a shared typed state: the raw
-incident, severity, an append-only evidence list, a trace timeline (which powers the
-dashboard), hypotheses with confidence, the remediation plan plus risk level, approval
-status, and the verification result. Evidence and trace *append* rather than
-overwrite, so parallel investigators and re-investigation loops merge cleanly instead
-of clobbering each other. Thread id is `incident-id + short uuid`, carried on every
-invoke — that's what lets a paused approval be resumed by a different process after
-a restart, falling back to a deterministic re-run from the Postgres snapshot when the
-in-memory thread map is gone.
+| Component | Responsibility |
+|---|---|
+| `app/api` | Webhook ingestion, REST API, approval/deny endpoints, rate limiting, audit persistence, static dashboard. |
+| `app/agents` | LangGraph nodes: triage, observability, RAG, RCA, remediation, approval, execute, verify, postmortem. |
+| `app/tools` | Typed adapters for Prometheus, Loki, Jaeger, and Kubernetes. All evidence collection is read-only and service-scoped. |
+| `app/security` | Untrusted-content wrapping, prompt-injection heuristics, sanitization, plan validation. |
+| `app/policy` | Severity thresholds, fault catalog, risk table, allowlisted actions. |
+| `app/rag` | Ingestion, embeddings, HyDE retrieval, metadata filtering, postmortem feedback. |
+| `app/ml` | Fault-family prior (XGBoost when available, random forest fallback) and feature extraction. |
+| `app/evaluation` | Offline harness, recorded-run bundles, RAGAS-style scoring, calibration, cost and safety analysis. |
+| `app/observability` | Prometheus exposition, OpenTelemetry tracing, Langfuse integration, notifier. |
+| `public` | Operator dashboard: incident list, evidence trace, hypotheses, approval controls, live metrics. |
 
-**Tools are honest.** Every external integration tries the real client with a short
-timeout, then falls back: synthetic metrics shaped by the incident, empty log/trace
-lists, local cosine search over `store.json` when Qdrant is down. Fallbacks are
-logged, never silent — the graph always completes with *something*, and the eval
-harness scores what actually happened rather than what was hoped.
+## Incident lifecycle
 
-## Agent in detail
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Alertmanager
+    participant O as OpsMind API
+    participant G as Incident graph
+    participant E as Evidence tools
+    participant Q as Qdrant
+    participant H as Human operator
+    participant K as Kubernetes
 
-Node by node, since this is where most of the interesting decisions live:
-
-- **Triage** builds a 9-feature row and calls the XGBoost model, falling back to
-  plain threshold rules if the model file is missing. No LLM involved — severity is
-  classification, not reasoning.
-- **Observability** first lets the LLM drive: one round of tool calls (query metrics,
-  search logs, deployment history, traces). Then a deterministic pass fills any gaps,
-  so the evidence set is complete even if the model under-called tools or there's no
-  key at all. Belt and suspenders.
-- **RAG** queries with alert type + service + log lines, takes the top 3 chunks, and
-  tags them `rag:<file>` so every grounded claim carries its provenance.
-- **RCA** prompts for strict JSON only, then parses defensively (raw → fenced block →
-  brace scan) because models love wrapping JSON in prose. Output is shape-checked and
-  confidence-validated; failures raise instead of guessing.
-- **Remediation** lets the LLM choose, but only from the allowlist — an unknown
-  string raises. Parameters are grounded, not hallucinated: replica counts derive
-  from the actual request rate, rollback targets from deploy evidence. Risk comes
-  from a static table, not vibes.
-- **Approval** is a pure router: forbidden → rejected, low → auto-approved, anything
-  else → waiting on a human.
-- **Execute** snapshots the pre-fix error rate, runs the action (or logs the dry-run
-  command), and counts executions.
-- **Verify** re-reads the same metric through the same tool path and calls it healthy
-  only if the rate dropped below 5% *and* below its starting value. On real clusters
-  it also gates on rollout status.
-- **Postmortem** drafts the writeup. Best-effort by design — it can never block an
-  approval.
-
-The routers encode the loops: RCA goes back to observability while confidence is
-under 0.8 (max 3 investigation rounds); verification routes back to remediation
-while unhealthy (max 2 executions). The graph always terminates.
-
-## RAG in detail
-
-Embeddings load `all-MiniLM-L6-v2` locally (384-d,
-baked into the Docker image), with a deterministic hash fallback if even that is
-unavailable. Measured separation is healthy: paraphrases score ~0.74, unrelated text
-~0.01. First model load costs ~30–40 seconds per process (weights + Hub check); the
-API warms it in the background at startup and compose sets offline mode against the
-baked cache.
-
-Ingest chunks the runbooks at 500 chars with 50 overlap, drops scraps under 40
-chars, embeds, and writes both `app/rag/store.json` and the Qdrant `runbooks`
-collection (dimension inferred from the actual vectors, so backends can't mismatch).
-Retrieval TCP-probes Qdrant first and permanently flags it down per process on first
-failure — this matters because dead localhost ports on Docker Desktop hang instead
-of refusing, which once cost 40 seconds per incident before the flag existed.
-
-## ML in detail
-
-Nine features: error rate, p95 latency, CPU, memory, request rate, deploy age, DB
-connections, redis up/down, pods ready — with documented defaults so unknown fields
-mean "assume healthy," not zero (that distinction once fabricated fake pods-down
-evidence, which is how the defaults earned their comment).
-
-The dataset generator writes 160 incidents across 11 fault families (56 P1 / 45 P2 /
-32 P3 / 27 P4), seed 42, with the first five pinned as classics for fixtures and
-rarer sampling for novel families. Training splits 70/15/15 stratified, grids three
-(depth, learning-rate) configs on validation macro-F1, and reports once on the
-held-out test set — val and test F1 both 1.0, which reflects a dataset separable
-by construction, not a modeling breakthrough. Artifacts (model, labels, metrics with
-confusion matrix) land in `app/ml/artifacts/`; MLflow logs params, metrics, and the
-model, registering the champion as `incident-severity-model`. One real gotcha baked
-in: XGBoost 3.x returns a probability matrix from `predict`, so inference
-argmax-normalizes.
-
-## Evaluation
-
-Two tracks, both running the live agent (budget ~3 LLM calls per incident):
-
-```bash
-py -m app.evaluation.run                  # gated: 70% severity / 60% RCA to pass
-py -m app.evaluation.run_real --per-fault 2   # report-only, real RCAEval telemetry
+    A->>O: POST /incidents/alertmanager
+    O->>G: start investigation (thread = incident_id)
+    G->>G: triage — severity policy + fault-family prior
+    G->>E: scoped metrics, logs, deploy history, traces
+    E-->>G: evidence
+    G->>Q: HyDE query + fault-family filter
+    Q-->>G: runbooks / prior postmortems
+    G->>G: hypotheses + confidence
+    alt confidence below threshold and loops < 3
+        G->>E: re-investigate
+    end
+    G->>G: plan allowlisted remediation
+    alt low risk
+        G->>K: execute
+    else medium / high risk
+        G-->>H: pause with plan + plan hash
+        H->>O: approve or deny (idempotency key)
+        O->>G: resume from Postgres checkpoint
+        G->>K: execute
+    end
+    G->>G: verify error-rate recovery
+    G->>Q: ingest postmortem when resolved
 ```
 
-The gated harness scores severity against labels and RCA through a cascade —
-substring match, then first-word match, then embedding cosine at 0.6 — sliced into
-known vs novel families. It checkpoints every incident and skips done rows, so a
-killed run resumes with zero waste; quota exhaustion stops the run with its own exit
-code instead of recording fake misses. The report step needs no key and prints
-slices, calibration, failure taxonomy, retrieval, safety, and cost lines.
+## Agent graph
 
-On the free tier, don't run all 160 at once. Shard it:
-
-```bash
-py -m app.evaluation.run --shard 1 --num-shards 4 --out app/evaluation/results_s1.json
-# ... repeat per shard, then:
-py -m app.evaluation.run --aggregate app/evaluation/results_s*.json --out app/evaluation/results.json
-py -m app.evaluation.report --results app/evaluation/results.json
+```mermaid
+stateDiagram-v2
+    [*] --> triage
+    triage --> observability
+    observability --> rag
+    rag --> rca
+    rca --> remediation: confidence >= 0.8 or loops >= 3
+    rca --> observability: confidence < 0.8 and loops < 3
+    remediation --> approval
+    approval --> execute: auto-approved or human approved
+    approval --> [*]: denied / escalated / expired
+    execute --> verify
+    verify --> remediation: unhealthy and executions < 2
+    verify --> [*]: healthy or retry budget exhausted
 ```
 
-The real-data track maps RCAEval chaos cases to incidents and scores fault-family
-hits with published keyword sets — report-only on purpose, since real telemetry
-doesn't respect synthetic thresholds and gating on it would be theater.
+| Node | Input | Output |
+|---|---|---|
+| `triage` | Alert labels and metrics | Severity, severity source, fault-family prior |
+| `observability` | Scoped incident | Evidence from metrics, logs, Kubernetes, traces |
+| `rag` | Alert context | Runbook and postmortem excerpts with scores |
+| `rca` | Wrapped evidence | Ranked hypotheses, confidence, root cause |
+| `remediation` | Root cause and metrics | Allowlisted action, parameters, risk level |
+| `approval` | Plan | Auto-approve, pause, reject, or escalate |
+| `execute` | Approved plan | Adapter result and pre-action error rate |
+| `verify` | Execution result | Before/after error rate and rollout health |
+| `postmortem` | Resolved incident | Markdown postmortem returned to the API |
 
-## Observability
+Graph state is checkpointed in Postgres with `thread_id = incident_id`. A paused
+approval survives API restarts and can be resumed after a restart. Approval
+metadata itself is process-local, so multi-replica deployments must route
+approval requests to the originating process or add a shared store (see
+[Limitations](#limitations)).
 
-`GET /metrics` exposes hand-rolled Prometheus exposition: incidents by severity and
-status, remediations by risk, mean RCA confidence, tool call counts — plus the AI
-layer: tokens by direction, call/error counts, total cost in USD, average latency,
-agent success rate, and the latest eval scores (pushed by the harness after each
-run). Token usage prefers real provider metadata and falls back to a length-based
-estimate, so the cost graphs never go blank.
+## Retrieval pipeline
 
-Grafana ships a provisioned AI dashboard (success rate, confidence gauge, cost,
-tokens, eval trend), Prometheus ships rules that page on agent failures, low success
-rate, eval regression, and LLM errors. Langfuse gets a trace per run with a span per
-node — auto-approved runs show two segments (pre-pause + post-resume), which is
-expected, not a bug. OpenTelemetry GenAI spans flow through the bundled collector
-into Jaeger; raw prompt content stays off by default and only attaches when you
-explicitly opt in, since incident text can carry secrets.
+```mermaid
+flowchart LR
+    ALERT[Alert + service + log sample] --> HYDE[HyDE query expansion]
+    HYDE --> EMB[all-MiniLM-L6-v2 embeddings]
+    EMB --> SEARCH[Qdrant cosine search]
+    SEARCH --> FILTER{Fault-family metadata filter}
+    FILTER --> TOPK[Top-k chunks]
+    TOPK --> RCA[RCA node]
+    RCA --> PM[Postmortem]
+    PM -->|verified recovery| CHUNK[Chunk + embed]
+    CHUNK --> SEARCH
+```
+
+- Runbooks are split on Markdown headings, then by size, embedded, and stored with
+  source and fault-family metadata in the `runbooks` collection.
+- Retrieval uses cosine similarity over a fault-family-filtered candidate set.
+  Resolved postmortems receive a modest relevance boost over static runbooks.
+- HyDE generates a hypothetical postmortem from the alert before retrieval. It is
+  a required step: retrieval fails closed when the LLM is unavailable.
+- Successful postmortems are written back to the corpus, closing the loop between
+  incident response and organizational memory.
 
 ## Safety model
 
-Three layers, each independent:
+OpsMind is designed around **bounded autonomy**, not unrestricted agency.
 
-1. **Untrusted content is delimited.** Log lines, alert text, runbook chunks, and
-   tool output get wrapped in `<untrusted>` tags with a standing prompt rule: tagged
-   content is data, never instructions. A scanner flags classic injection phrasing,
-   and any hit forces human approval regardless of risk.
-2. **Approval is structural.** The graph literally cannot reach `execute` unapproved
-   (`interrupt_before`). TTL expiry, plan-hash binding, approver identity, and
-   idempotency are covered in the API section above; the audit table hash-chains
-   every decision including rejections.
-3. **Execution is allowlisted.** The remediation choice is validated against the
-   risk table, parameters are schema-bounded, `delete database`-class actions map to
-   `forbidden` and can never route to execute. Dry-run is the default; real kubectl
-   patches need the flag *and* a reachable cluster.
+| Control | Implementation |
+|---|---|
+| Closed action set | `restart pods`, `scale replicas`, `restart redis`, `rollback deployment`, `escalate`. Anything else is rejected. |
+| Risk tiers | Low-risk actions may auto-execute; medium/high-risk actions require human approval; forbidden actions are rejected. |
+| Plan binding | Approval is tied to a SHA-256 hash of the exact remediation plan. A changed plan cannot reuse an old approval. |
+| Approval expiry | Configurable TTL (`OPSMIND_APPROVAL_TTL_MIN`); expired approvals are swept and marked in the audit trail. |
+| Idempotency | Approve/deny calls accept an idempotency key; replays return the original result. |
+| Execution guard | Kubernetes mutations require `OPSMIND_EXECUTE=true`; compose and kind default to `false`. |
+| Read-only investigation | Evidence tools are query-only; action adapters are separate and only reachable after the approval node. |
+| Service scoping | Tool calls validate DNS-safe service names and limit queries to the incident service/namespace. |
+| Untrusted content | Logs, descriptions, and tool output are wrapped in `<untrusted>` tags, control characters are stripped, and a prompt-injection heuristic forces human review. |
+| Input limits | Pydantic bounds on payloads, capped evidence items, capped tool-call counts, and per-IP POST rate limiting. |
+| Audit trail | Incidents, approvals, denials, and execution results are persisted in Postgres; the clear endpoint is disabled in strict mode. |
 
-Separately, the investigation tools are also exposed over MCP (`app/mcp_server.py`)
-as five strictly read-only operations — metrics, logs, deploy history, traces,
-runbook search. Execution is deliberately not on MCP. The agent itself calls the
-Python functions directly; MCP exists so outside clients (Claude Desktop, other
-agents) can borrow the read path.
+Prompt-injection detection is intentionally conservative: a positive match does not
+block the investigation, it removes the ability to auto-execute and routes the
+decision to a human.
 
-## CI/CD and deploy
+## Evaluation
 
-GitHub Actions (`ci-cd.yml`) runs lint → tests → small train → ingest → a gated
-eval on main, then builds and pushes the image to GHCR, lints the Helm chart,
-dry-runs it against kubectl, and validates Terraform. ArgoCD syncs `helm/opsmind`
-automatically; Argo Rollouts promotes the canary in steps (25% → analysis → 50% →
-100%) gated on the agent's own success-rate metric via Prometheus.
+The evaluation harness measures the agent end to end on generated incidents and
+the RCA/remediation path on recorded chaos bundles.
 
-Three ways to deploy, same chart:
+**Offline benchmark — 131 incidents, 20 unseen fault types**
 
-- **kind (free, ~15 min):** `bash scripts/kind-argo.sh`, port-forward, open the
-  dashboard. Best for interviews and recording.
-- **Public URL (~$0):** `fly.toml` and `render.yaml` are checked in with the demo
-  shield on (6 req/min per IP, 30-min approvals, memory checkpointer, no real
-  execution). Add Neon Postgres + Qdrant Cloud free tiers, set secrets, deploy.
-- **AWS EKS (~$70–90/mo, destroy after):** Terraform up, push to ECR, Helm install
-  with ingress, apply the ArgoCD app and canary. Teardown same day
-  (`cd terraform/eks && terraform destroy`) — it bills while the cluster exists,
-  not while you watch.
+| Metric | Overall (n=131) | Known faults (n=111) | Unseen faults (n=20) |
+|---|---:|---:|---:|
+| Severity accuracy | **98.5%** | 98.2% | 100% |
+| Root-cause accuracy | **68.7%** | 66.7% | 80.0% |
+| Runbook hit@3 | **77.9%** | — | — |
+| Median end-to-end latency | **16.3 s** | — | — |
+| Mean cost per incident | **$0.00032** | — | — |
+| Forbidden actions proposed | **0** | 0 | 0 |
 
-## Project layout
+The corpus mixes known and unseen fault families so the harness reports
+generalization separately from memorization. RCA matches use lexical containment
+plus embedding similarity against ground truth. The report also emits confidence
+calibration, a failure taxonomy, retrieval hit@3, remediation safety, and cost
+statistics. The latest generated report is checked in at
+[`docs/eval/REPORT.md`](docs/eval/REPORT.md).
+
+Reproduce:
+
+```bash
+python data/generate_incidents.py --n 160
+python -m app.ml.family
+python -m app.rag.ingest
+python -m app.evaluation.run
+python -m app.evaluation.report --results app/evaluation/results.json --out docs/eval/REPORT.md
+```
+
+Recorded-run evaluation (no cluster required for scoring):
+
+```bash
+python -m app.evaluation.run_offline --dir data/bundles
+```
+
+**What the numbers mean.** Severity is largely policy-driven and is expected to be
+high. RCA is the harder task: 68.7% overall, with stronger accuracy on the unseen
+slice. The benchmark is generated, so these numbers should be read as a regression
+gate and a measure of pipeline quality, not as a claim about production incident
+accuracy.
+
+## Deployment
+
+### Local full stack
+
+`docker compose` starts Postgres, Qdrant, MLflow, Prometheus, Alertmanager, Loki,
+Promtail, Jaeger, the OpenTelemetry Collector, Grafana, the demo checkout service,
+and the OpsMind API.
+
+| Service | URL |
+|---|---|
+| OpsMind dashboard | http://localhost:4000 |
+| Grafana | http://localhost:3001 (admin/admin) |
+| Prometheus | http://localhost:9090 |
+| Alertmanager | http://localhost:9093 |
+| Jaeger | http://localhost:16686 |
+| MLflow | http://localhost:5000 |
+| Demo checkout | http://localhost:8002 |
+
+The demo service exposes chaos switches (`/chaos/errors`, `/chaos/slow`) so the
+full alert-to-remediation path can be exercised without a real outage.
+
+### Kubernetes and GitOps
+
+```mermaid
+flowchart TB
+    subgraph CI["GitHub Actions"]
+        LINT[ruff + compile] --> EVAL[eval gate]
+        EVAL --> BUILD[build + push GHCR]
+        BUILD --> STAMP[stamp image tag]
+    end
+
+    subgraph GitOps
+        MAIN[(main branch)] --> ARGO[ArgoCD]
+        ARGO --> RELEASE[Helm release]
+    end
+
+    subgraph Cluster["Kubernetes"]
+        RELEASE --> API[OpsMind API Deployment]
+        RELEASE --> QD[(Qdrant)]
+        RELEASE --> PG[(Postgres)]
+        RELEASE --> HPA[HPA / PDB / ServiceMonitor]
+        API --> DEMO[Demo workload]
+    end
+
+    STAMP --> MAIN
+```
+
+- `helm/opsmind` packages the API, Postgres, Qdrant, HPA, ingress, service account,
+  and ServiceMonitor.
+- `argocd/app.yaml` defines the GitOps application with automated sync and self-heal.
+- `kind/` contains cluster and workload profiles for local multi-node testing. The
+  kind profile also ships Prometheus recording rules that map cluster-native signals
+  (replica availability, cAdvisor CPU/memory, probe latency, network rate) onto the
+  metric names the agent queries.
+- `chaos/oom-stress.yaml` provides a repeatable memory-pressure fault.
+- `.github/workflows/ci-cd.yml` runs lint, model training, RAG ingestion, gated
+  evaluation, image build/push, Helm lint, kubeconform validation, and image-tag
+  stamping back to `main`.
+
+If the GHCR package is private, either make it public or create a pull secret and
+pass it with `--set imagePullSecrets[0].name=<secret>`.
+
+## Quick start
+
+**Requirements:** Python 3.11+, Docker, a Google API key for the LLM, and a
+Postgres instance (required — the graph has no in-memory checkpointer fallback).
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.example .env
+# Set GOOGLE_API_KEY and DATABASE_URL in .env
+
+docker compose up -d postgres qdrant
+
+python data/generate_incidents.py --n 160
+python -m app.ml.family
+python -m app.rag.ingest
+
+uvicorn app.api.server:app --host 0.0.0.0 --port 4000
+```
+
+The API and dashboard are available at `http://localhost:4000`. To exercise the
+investigation tools, start the observability services as well:
+
+```bash
+docker compose up -d prometheus alertmanager loki promtail jaeger otel-collector
+```
+
+On Windows, activate the environment with `.venv\Scripts\activate` and substitute
+`py` for `python` if preferred.
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The suite covers policy thresholds, plan validation, approval routing, prompt
+injection handling, rate limiting, and evaluation statistics. It runs without a
+database, cluster, or API key.
+
+### End-to-end demo
+
+```bash
+# Break the demo checkout service
+curl -X POST http://localhost:8002/chaos/errors
+
+# Prometheus fires DemoFastBurn; Alertmanager forwards to OpsMind
+# Watch the investigation at http://localhost:4000
+
+# Approve the proposed remediation
+curl -X POST http://localhost:4000/incidents/<INCIDENT_ID>/approve \
+  -H "Content-Type: application/json" \
+  -d '{"approved_by":"operator"}'
+```
+
+Triggering the same fault again should retrieve the newly ingested postmortem and
+converge faster.
+
+## API
+
+Base URL: `http://localhost:4000`. When `OPSMIND_API_KEY` is set, clients must
+send `X-API-Key`; the Alertmanager webhook uses `OPSMIND_ALERTMANAGER_KEY`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness and pending-thread count |
+| `GET` | `/metrics` | Prometheus metrics for the agent itself |
+| `GET` | `/incidents` | List persisted investigations |
+| `GET` | `/incidents/{id}` | Current graph state for an incident |
+| `POST` | `/incidents` | Submit an incident manually |
+| `POST` | `/incidents/alertmanager` | Alertmanager webhook receiver |
+| `POST` | `/incidents/{id}/approve` | Approve a paused plan |
+| `POST` | `/incidents/{id}/deny` | Reject a paused plan |
+| `DELETE` | `/incidents` | Disabled; audit records are append-only |
+| `GET` | `/demo/{id}.json` | Read-only sample incident for the dashboard |
+
+Approval and denial accept an optional `Idempotency-Key` header. Messages are
+validated with Pydantic and size-bounded.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GOOGLE_API_KEY` | required | Gemini access for reasoning and HyDE |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model identifier |
+| `DATABASE_URL` | required | Incident store and LangGraph checkpoints |
+| `QDRANT_URL` | required | Vector store |
+| `PROMETHEUS_URL` | required | Metrics evidence |
+| `LOKI_URL` | required | Log evidence |
+| `JAEGER_URL` | required | Trace evidence |
+| `OPSMIND_NAMESPACE` | required | Kubernetes namespace for remediation |
+| `OPSMIND_EXECUTE` | `false` | Enables Kubernetes mutations |
+| `OPSMIND_APPROVAL_TTL_MIN` | `60` | Approval validity window; `0` disables expiry |
+| `OPSMIND_REQUIRE_APPROVER` | `false` | Requires an approver identity |
+| `OPSMIND_API_KEY` | unset | Shared-secret API auth |
+| `OPSMIND_ALERTMANAGER_KEY` | falls back to API key | Webhook auth |
+| `OPSMIND_RATE_LIMIT_PER_MIN` | `0` | Per-IP POST limit; `0` disables |
+| `SLACK_WEBHOOK_URL` | unset | Incident notifications |
+| `LANGFUSE_*` | unset | LLM tracing |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP trace export |
+| `HF_HUB_OFFLINE` | `0` | Use the baked-in embedding model cache |
+
+## Observability
+
+**Agent metrics** (`/metrics`): incident counts by status and severity, remediation
+counts by risk, RCA confidence, latency, tool calls, RAG queries, LLM calls,
+tokens, cost, errors, success rate, and the last gated evaluation scores.
+
+**Platform telemetry:**
+
+- Prometheus scrapes the API and the demo workload and evaluates SLO burn-rate rules.
+- Alertmanager routes firing alerts to `/incidents/alertmanager`.
+- Promtail ships structured JSON logs to Loki with an `app` label.
+- The OpenTelemetry Collector forwards spans to Jaeger; the API also exports spans
+  for each graph node and LLM call.
+- Grafana ships dashboards for agent health, LLM cost/latency, and incident flow.
+- Langfuse records prompts, completions, token usage, and per-node latency when keys
+  are configured.
+
+## Repository layout
 
 ```text
 app/
-  agents/         graph, state, triage, observability, rag, rca, remediation,
-                  approval, execute, verify, postmortem, llm + gemini provider
-  tools/          prometheus, loki, traces, kubernetes, registry (LLM tool bindings)
-  rag/            embeddings, ingest, retrieve (+ store.json, gitignored)
-  ml/             features, train, classifier (+ artifacts/, gitignored models)
-  api/            FastAPI server, postgres store, approval hardening, rate limiting
-  demo/           toy checkout service with /chaos/{ok,errors,slow}
-  observability/  prometheus metrics, langfuse, otel tracing, slack notifier
-  evaluation/     gated harness, real-data track, report generator
-  security/       untrusted-content wrapping + injection scanner
-  mcp_server.py   read-only tools over MCP
-data/             generator, synthetic incidents (gitignored), runbooks (the RAG corpus)
-docker/           prometheus/alertmanager/loki/promtail/otel/grafana configs, init.sql
-helm/opsmind/     chart: api, demo, ingress, HPA, serviceaccount, config
-terraform/eks/    VPC + EKS + ECR
-kind/  argocd/  rollouts/  public/  (static dashboard)  scripts/
+  agents/         LangGraph nodes, state, LLM provider, postmortem writer
+  api/            FastAPI app, approvals, persistence, rate limiting
+  demo/           Chaos-enabled checkout service used by the local stack
+  evaluation/     Harness, bundles, calibration, RAGAS-style scoring, reports
+  ml/             Fault-family classifier and feature extraction
+  observability/  Metrics, tracing, Langfuse, notifier
+  policy/         Severity rules, fault catalog, risk table
+  rag/            Ingestion, embeddings, retrieval, feedback
+  security/       Untrusted-content handling and injection detection
+  tools/          Prometheus, Loki, Jaeger, Kubernetes adapters
+  mcp_server.py   MCP server exposing the read-only investigation tools
+public/           Operator dashboard (vanilla JS/CSS)
+data/
+  generate_incidents.py  Synthetic incident generator
+  runbooks/              Operational runbooks used by retrieval
+  bundles/               Recorded chaos-run bundles for offline evaluation
+docker/           Compose service configuration and Grafana provisioning
+helm/             Helm chart for the API, Postgres, and Qdrant
+k8s/              Raw Kubernetes manifests
+argocd/           GitOps application definition
+kind/             Local cluster and workload profiles
+chaos/            Chaos experiments
+rollouts/         Canary rollout definition
+scripts/          Cluster bootstrap and run-recording helpers
 ```
 
-Design calls are on record as ADRs in the repo history: why LangGraph over chains
-(loops + branches + restart-proof pauses), why approval sits before execute, why
-XGBoost instead of an LLM for severity, why Postgres backs the checkpointer, and why
-the action list is closed.
+## Design decisions
 
-## Tests
+**Policy beats a model for severity.** Alertmanager already encodes the burn-rate
+policy. Re-learning it with a classifier would add opacity without adding signal.
+The classifier is reserved for fault family, where labels actually exist.
 
-```bash
-py -m ruff check app tests data
-py -m pytest tests/ -q    # 70 passed, 1 skipped
-```
+**The prior is advisory, not an oracle.** A wrong fault family would scope evidence
+collection incorrectly, so unknown families are dropped instead of forced. The RCA
+node can overrule the prior when the evidence disagrees.
 
-No LLM key needed for any of it. Injection tests use a fake model that *obeys*
-injections, which proves the gates hold rather than the model being polite. Approval
-tests cover expiry, stale hashes, double-execution, and identity precedence. Team,
-provider, tracing, MCP, and rate-limit suites pin the rest. The LLM itself is
-measured by the eval harness, never by unit tests — that's a deliberate split.
+**The agent proposes; policy and humans dispose.** The action set is closed, risk
+tiers are explicit, and the execution adapter is unreachable until the approval
+node completes. Execution is disabled by default.
 
-## Troubleshooting
+**Approvals bind to content.** A hash of the exact plan prevents a stale approval
+from authorizing a different action after re-planning.
 
-| Symptom | Fix |
-|---|---|
-| `GOOGLE_API_KEY is not set` / incidents marked `failed` | Copy `.env.example` to `.env`, set the key, restart the API (the LLM client caches per process) |
-| `429 RESOURCE_EXHAUSTED` / eval exits 2 | Free-tier quota, not a bug. Wait for reset and re-run — done rows are skipped. Shard next time |
-| First incident takes ~40s | Normal: embedding weights + warmup load once, then cache |
-| `qdrant query failed, using local store` | Normal offline behavior; check `QDRANT_URL` if you expected a server |
-| `postgres checkpointer unavailable, using memory` | Check `DATABASE_URL`; memory mode loses pause/resume across restarts |
-| Prometheus shows API down in compose | Check `docker compose logs api` — usually the model bake or a missing key |
-| Helm `ServiceMonitor` error | Needs the prometheus-operator CRD; disable it or install the operator |
-| Windows `curl -d @file` fails | Use Git Bash, or `curl.exe ... --data "@path"` in PowerShell |
+**Evidence is untrusted by construction.** Logs and tool output are data, not
+instructions. Wrapping, sanitization, and injection heuristics make that boundary
+explicit and testable.
 
-And the standing rule: `.env` is gitignored. If a key ever leaks into a log,
-screenshot, or commit, rotate it at the provider immediately.
+**Fail closed on infrastructure.** Missing Postgres, Qdrant, Prometheus, Loki, or
+Jaeger configurations raise rather than silently degrading to guesses. An empty
+log or trace result is still a valid observation.
 
-## FAQ
+**Cheap by design.** The median investigation costs a fraction of a cent, which
+makes broad offline evaluation and continuous regression testing practical.
 
-**Why LangGraph instead of a plain chain?** Chains can't loop (re-investigate under
-0.8), branch (risk routing), or pause mid-run and resume days later from another
-process. A checkpointed graph expresses all three, and the dashboard timeline falls
-out for free.
+## Limitations
 
-**What if the human never approves?** The thread sits paused indefinitely and
-nothing executes. A background sweeper expires idle approvals past the TTL. No
-timeout has ever auto-approved anything, and none ever will.
+- **Generated benchmark.** The 131-incident corpus is synthetic. The next step is a
+  larger corpus of recorded chaos runs and real postmortems, grouped by run to avoid
+  leakage.
+- **RCA accuracy.** 68.7% overall is useful but not sufficient for unattended
+  diagnosis. Human review remains mandatory for medium/high-risk actions.
+- **Confidence calibration.** The current run has ECE 0.22 and high-confidence
+  accuracy below the 0.8 re-investigation threshold, so the threshold should be
+  re-tuned against a larger corpus before it is treated as a safety property.
+- **Single-process approval metadata.** Approval TTL and idempotency state live in
+  process memory. The graph checkpoint is durable in Postgres, but multi-replica
+  deployments need a shared approval store or sticky routing. The Helm chart's
+  default replica count should be raised only after that change.
+- **Execution adapters are cluster-specific.** The Kubernetes adapter requires RBAC
+  and a reachable cluster; `OPSMIND_EXECUTE=false` is the safe default.
+- **Auth is a shared secret.** There is no per-user identity, RBAC, or OIDC
+  integration yet. Deploy behind an authenticated ingress for shared environments.
+- **No multi-cluster routing.** The agent targets one namespace in one cluster per
+  deployment.
 
-**What if the model fails or the key is missing?** The node raises, the API retries
-twice, then records the incident as failed. There's no silent rules-engine fallback
-— a guess dressed as reasoning is worse than an honest failure.
+## Roadmap
 
-**Why not let the LLM grade severity too?** Classification over nine numeric
-features is a gradient-boosting problem: faster, cheaper, deterministic, and unit
-testable. Save the LLM for what it's good at — reading messy evidence and arguing
-with itself about root causes.
+- Shared approval/idempotency store for horizontally scaled deployments.
+- Recorded-chaos corpus with grouped train/eval splits and per-family error bars.
+- OIDC-backed approver identity and signed audit export.
+- Cost-aware model routing and prompt caching.
+- Multi-cluster and multi-tenant incident routing.
+- Canary analysis as a first-class verification signal.
 
-**Biggest production gap, honestly?** Single-process API, per-process TTL and
-idempotency stores (fine for one replica, needs Postgres backing to scale), asserted
-rather than authenticated approver identity, and no approval-timeout sweeper paging
-beyond Slack. Each has a known fix; none is architecturally load-bearing.
+---
 
-## What's next
-
-Full 160-incident sweep refresh, permanent public demo URL, and the canary rollback
-clip. The eval harness already supports all of it — mostly a matter of key budget
-and recording time.
+Built with Python, FastAPI, LangGraph, Gemini, Qdrant, Postgres, XGBoost,
+Prometheus, Loki, Jaeger, OpenTelemetry, Grafana, Docker, Kubernetes, Helm, ArgoCD,
+and GitHub Actions.

@@ -1,0 +1,291 @@
+{
+  "incident": {
+    "incident_id": "real_cpu_cart_001",
+    "service": "cartservice",
+    "namespace": "boutique",
+    "alert_type": "cpu_starvation",
+    "description": "kind run: real cluster metric path proof (cpu/mem live)"
+  },
+  "evidence": [
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_utilization"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:34.271639"
+      }
+    },
+    {
+      "source": "search_logs",
+      "args": {
+        "query": "error"
+      },
+      "result": []
+    },
+    {
+      "source": "get_deployment_history",
+      "args": {},
+      "result": {
+        "minutesAgo": 150.2,
+        "version": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/cartservice:v0.10.7"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "error_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:36.177381"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "p95_latency_ms"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:36.184629"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_pct"
+      },
+      "result": {
+        "value": 0.9804055894530407,
+        "timestamp": "2026-10-08T00:46:36.186251"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "memory_pct"
+      },
+      "result": {
+        "value": 44.879150390625,
+        "timestamp": "2026-10-08T00:46:36.193553"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "db_connections"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:36.210036"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "redis_up"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-08T00:46:36.219119"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "pods_ready"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-08T00:46:36.220969"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "request_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:36.236602"
+      }
+    },
+    {
+      "source": "get_trace",
+      "args": {},
+      "result": []
+    },
+    {
+      "source": "pod_events",
+      "args": {
+        "service": "cartservice"
+      },
+      "result": []
+    },
+    {
+      "source": "rag:networking.md",
+      "text": "making every request hold a worker longer.\n3. Autoscaler min replicas set too low or scaling capped by quota.\n\n## How to confirm\n- Compare `request_rate` now vs same hour last week. 3-5x with no deploy = spike.\n- Check CPU vs error shape. Load issues ramp; bad deploys cliff.\n- Look at queue depth. Growing queue + high CPU means you are behind, not broken.\n\n## Standard fix\nScale out. It is low risk and reversible.\n\n```\nkubectl scale deployment/<service> --replicas=5\n```\n\nThen check the autoscaler",
+      "score": 0.4769059634199356
+    },
+    {
+      "source": "rag:scaling.md",
+      "text": "# Scaling Runbook\n\nCovers: cpu_starvation, pod_kill_storm, traffic_spike, retry_storm_cascade.\n\n## Symptoms\n\n- CPU saturation or throttling with climbing latency; or ready-replica count\n  collapsed after pod kills while traffic is steady.\n- Retry storms: duplicate request ids, circuit breakers opening, queue depth\n  growing faster than workers drain it.\n\n## Confirm\n\n- Request rate per replica far above headroom (rule of thumb: scale so each\n  replica handles ~2000 rps).\n- Pod events show OOMKill",
+      "score": 0.46577092396843595
+    },
+    {
+      "source": "rag:networking.md",
+      "text": "# Networking / traffic spike runbook\n\n## Symptoms\n- CPU pinned high (80%+), p95 latency degrades gradually, moderate error rate from timeouts rather than crashes.\n- Logs show `queue depth increasing`, `worker saturation`, upstream timeouts.\n- No recent deploy. `request_rate` is well above baseline. This is load, not a bad release.\n\n## Likely causes\n1. Genuine traffic surge (launch, retry storm from a client, cron overlap).\n2. One slow dependency making every request hold a worker longer.\n3. Auto",
+      "score": 0.43624672649777074
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_starvation"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:45.509463"
+      }
+    },
+    {
+      "source": "search_logs",
+      "args": {
+        "query": "cartservice"
+      },
+      "result": []
+    },
+    {
+      "source": "get_deployment_history",
+      "args": {},
+      "result": {
+        "minutesAgo": 150.4,
+        "version": "us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/cartservice:v0.10.7"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "error_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:45.595004"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "p95_latency_ms"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:45.602239"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_pct"
+      },
+      "result": {
+        "value": 0.9804055894530407,
+        "timestamp": "2026-10-08T00:46:45.604107"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "memory_pct"
+      },
+      "result": {
+        "value": 44.879150390625,
+        "timestamp": "2026-10-08T00:46:45.610031"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "db_connections"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:45.618792"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "redis_up"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-08T00:46:45.624648"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "pods_ready"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-08T00:46:45.626135"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "request_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-08T00:46:45.638010"
+      }
+    },
+    {
+      "source": "get_trace",
+      "args": {},
+      "result": []
+    },
+    {
+      "source": "pod_events",
+      "args": {
+        "service": "cartservice"
+      },
+      "result": []
+    },
+    {
+      "source": "rag:networking.md",
+      "text": "making every request hold a worker longer.\n3. Autoscaler min replicas set too low or scaling capped by quota.\n\n## How to confirm\n- Compare `request_rate` now vs same hour last week. 3-5x with no deploy = spike.\n- Check CPU vs error shape. Load issues ramp; bad deploys cliff.\n- Look at queue depth. Growing queue + high CPU means you are behind, not broken.\n\n## Standard fix\nScale out. It is low risk and reversible.\n\n```\nkubectl scale deployment/<service> --replicas=5\n```\n\nThen check the autoscaler",
+      "score": 0.4769059634199356
+    },
+    {
+      "source": "rag:scaling.md",
+      "text": "# Scaling Runbook\n\nCovers: cpu_starvation, pod_kill_storm, traffic_spike, retry_storm_cascade.\n\n## Symptoms\n\n- CPU saturation or throttling with climbing latency; or ready-replica count\n  collapsed after pod kills while traffic is steady.\n- Retry storms: duplicate request ids, circuit breakers opening, queue depth\n  growing faster than workers drain it.\n\n## Confirm\n\n- Request rate per replica far above headroom (rule of thumb: scale so each\n  replica handles ~2000 rps).\n- Pod events show OOMKill",
+      "score": 0.46577092396843595
+    },
+    {
+      "source": "rag:networking.md",
+      "text": "# Networking / traffic spike runbook\n\n## Symptoms\n- CPU pinned high (80%+), p95 latency degrades gradually, moderate error rate from timeouts rather than crashes.\n- Logs show `queue depth increasing`, `worker saturation`, upstream timeouts.\n- No recent deploy. `request_rate` is well above baseline. This is load, not a bad release.\n\n## Likely causes\n1. Genuine traffic surge (launch, retry storm from a client, cron overlap).\n2. One slow dependency making every request hold a worker longer.\n3. Auto",
+      "score": 0.43624672649777074
+    }
+  ],
+  "label": {
+    "fault_family": "cpu_starvation",
+    "service": "cartservice",
+    "fix": "scale replicas"
+  },
+  "outcome": {
+    "recovered": false,
+    "mttr_s": null
+  },
+  "run_id": "kind-run-003",
+  "agent": {
+    "severity": "P4",
+    "root_cause": "Container CPU throttling due to strict limits or noisy neighbors causing high CPU saturation on cartservice.",
+    "confidence": 0.85,
+    "predicted_action": "scale replicas"
+  }
+}

@@ -2,14 +2,14 @@ services:
   postgres:
     image: postgres:16
     environment:
-      # Dev-only defaults. Override with a real secret in production.
-      POSTGRES_USER: ${POSTGRES_USER:-opsmind}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opsmind}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: opsmind
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U opsmind"]
       interval: 10s
@@ -23,6 +23,11 @@ services:
       - "6333:6333"
     volumes:
       - qdrantdata:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.1.0
@@ -68,8 +73,6 @@ services:
     image: jaegertracing/all-in-one:1.62
     ports:
       - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
 
@@ -98,23 +101,22 @@ services:
     command: uvicorn app.demo.main:app --host 0.0.0.0 --port 8002
     ports:
       - "8002:8002"
-    environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
 
   api:
     build: .
     ports:
       - "4000:4000"
     environment:
-      DATABASE_URL: postgres://opsmind:opsmind@postgres:5432/opsmind
+      DATABASE_URL: postgres://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/opsmind
       QDRANT_URL: http://qdrant:6333
-      MLFLOW_TRACKING_URI: http://mlflow:5000
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://loki:3100
       JAEGER_URL: http://jaeger:16686
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      OPSMIND_TRACE_CONTENT: "false"
-      HF_HUB_OFFLINE: "1"
+      OPSMIND_NAMESPACE: ${OPSMIND_NAMESPACE:-opmind}
+      OPSMIND_EXECUTE: ${OPSMIND_EXECUTE:-false}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?GOOGLE_API_KEY is required}
+      HF_HUB_OFFLINE: "0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=2)"]
       interval: 30s
@@ -125,7 +127,7 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

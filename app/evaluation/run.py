@@ -83,6 +83,7 @@ def run_names(names, out=None):
                 "actual_severity": gt["severity"],
                 "predicted_root_cause": out_v.get("root_cause"),
                 "actual_root_cause": gt["root_cause"],
+                "predicted_family": out_v.get("fault_family"),
                 "confidence": out_v.get("confidence"),
                 "predicted_action": (out_v.get("remediation_plan") or {}).get("action"),
                 "predicted_risk": out_v.get("risk_level"),

@@ -20,12 +20,8 @@ from app.observability.notifier import notify
 load_dotenv()
 log = logging.getLogger("opsmind")
 
-threads: dict = {}  # incident_id -> langgraph thread_id
+threads: dict = {}
 _threads_lock = threading.Lock()
-
-
-def _new_thread_id(incident_id: str) -> str:
-    return f"{incident_id}-{uuid.uuid4().hex[:8]}"
 
 
 def _set_thread(incident_id: str, tid: str):
@@ -47,12 +43,9 @@ async def _lifespan(app: FastAPI):
     import asyncio
 
     def _warm():
-        try:
-            from app.rag.embeddings import warmup as _embed_warmup
+        from app.rag.embeddings import warmup as _embed_warmup
 
-            _embed_warmup()
-        except Exception as e:
-            log.debug(f"embedding warmup skipped: {e}")
+        _embed_warmup()
         try:
             from app.observability.langfuse import warmup as _lf_warmup
 
@@ -105,6 +98,7 @@ app = FastAPI(title="opsmind", lifespan=_lifespan)
 class IncidentIn(BaseModel):
     incident_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
     service: str = Field(min_length=1, max_length=128)
+    namespace: str = Field(default="default", max_length=64)
     environment: str = Field(default="production", max_length=32)
     alert_type: str = Field(default="unknown", max_length=128)
     description: str = Field(default="", max_length=2000)
@@ -116,6 +110,13 @@ class IncidentIn(BaseModel):
 class ApproveIn(BaseModel):
     approved_by: str = Field(default="human", min_length=1, max_length=64)
     plan_hash: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class DenyIn(BaseModel):
+    denied_by: str = Field(default="human", min_length=1, max_length=64)
+    reason: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class AlertmanagerAlert(BaseModel):
@@ -123,6 +124,8 @@ class AlertmanagerAlert(BaseModel):
     fingerprint: str = ""
     labels: dict = Field(default_factory=dict)
     annotations: dict = Field(default_factory=dict)
+    startsAt: str = ""
+    endsAt: str = ""
 
 
 class AlertmanagerPayload(BaseModel):
@@ -177,7 +180,13 @@ def demo_blob(incident_id: str):
 
 @app.get("/incidents")
 def list_incidents():
-    return list(store.memory_store.values())
+    return store.list_incidents()
+
+
+@app.delete("/incidents")
+def clear_incidents():
+    """Disabled in strict mode: audit tables are append-only."""
+    raise HTTPException(405, "clear disabled: incidents are append-only in Postgres")
 
 
 @app.get("/incidents/{incident_id}")
@@ -188,14 +197,9 @@ def get_incident(incident_id: str):
     tid = _get_thread(safe)
     if tid is not None:
         from app.agents.graph import _config, ops_mind_graph
-        try:
-            return ops_mind_graph.get_state(_config(tid)).values
-        except Exception:
-            pass
+        return ops_mind_graph.get_state(_config(tid)).values
     snap = store.load_snapshot(safe)
-    if snap is not None:
-        return snap["state"]
-    raise HTTPException(404, "unknown incident")
+    return snap["state"]
 
 
 @app.post("/incidents/alertmanager")
@@ -214,6 +218,7 @@ async def alertmanager_webhook(payload: AlertmanagerPayload):
                                    (alert.fingerprint or labels.get("alertname", "alert")).lower())[:32]
             or f"am-{uuid.uuid4().hex[:8]}",
             "service": str(labels.get("service", labels.get("instance", "unknown")))[:128],
+            "namespace": str(labels.get("namespace", "default"))[:64],
             "environment": str(labels.get("environment", "production"))[:32],
             "alert_type": str(labels.get("alertname", "prometheus_alert")).lower()[:128],
             "description": str(annotations.get("summary", ""))[:2000],
@@ -221,8 +226,14 @@ async def alertmanager_webhook(payload: AlertmanagerPayload):
             "logs": [],
             "deployment_minutes_ago": 9999,
         }
+        if alert.startsAt:
+            incident["alert_window"] = {"start": alert.startsAt[:64],
+                                        "end": (alert.endsAt or "")[:64]}
+        claimed = str(labels.get("severity", "") or "").upper()
+        if claimed in ("P1", "P2", "P3", "P4"):
+            incident["severity"] = claimed
         result, tid = await asyncio.to_thread(run_incident, incident,
-                                              _new_thread_id(incident["incident_id"]))
+                                              incident["incident_id"])
         _set_thread(incident["incident_id"], tid)
         _persist(incident, tid, result)
         results.append(result)
@@ -237,12 +248,17 @@ def _persist(incident: dict, thread_id: str, result: dict):
     store.save_incident({
         "id": incident["incident_id"],
         "service": incident["service"],
+        "namespace": incident.get("namespace", "default"),
         "environment": incident.get("environment", "production"),
         "alert_type": incident.get("alert_type", "unknown"),
         "description": incident.get("description", ""),
         "severity": result.get("severity"),
         "status": "resolved" if (result.get("verification_result") or {}).get("healthy")
         else "investigating" if result.get("approval_status") == "awaiting_human"
+        else "denied" if result.get("approval_status") == "denied"
+        else "escalated" if result.get("approval_status") == "escalated"
+        else "unhealthy" if (result.get("remediation_plan") or {}).get("executed")
+        and not (result.get("verification_result") or {}).get("healthy")
         else "remediating",
     })
     store.save_evidence(incident["incident_id"], result.get("evidence", []))
@@ -252,6 +268,8 @@ def _persist(incident: dict, thread_id: str, result: dict):
         store.save_remediation(incident["incident_id"], result["remediation_plan"]["action"],
                                result.get("risk_level", "unknown"),
                                "executed" if result.get("approval_status") in ("auto_approved", "approved")
+                               else "escalated" if result.get("approval_status") == "escalated"
+                               else "denied" if result.get("approval_status") == "denied"
                                else "proposed")
     store.save_snapshot(incident["incident_id"], thread_id, result)
     metrics.record_result(result)
@@ -277,12 +295,15 @@ async def create_incident(incident: IncidentIn):
     result, tid = None, None
     handler = get_trace_handler()
     callbacks = [handler] if handler else None
+    tid = incident["incident_id"]
+    if is_paused(tid):
+        from app.agents.graph import _config, ops_mind_graph
+        return ops_mind_graph.get_state(_config(tid)).values
     started = time.time()
-    for attempt in range(2):  # one retry before we call it failed
+    for attempt in range(2):
         try:
             result, tid = await asyncio.to_thread(
-                run_incident, incident,
-                _new_thread_id(incident["incident_id"]), callbacks,
+                run_incident, incident, tid, callbacks,
             )
             break
         except Exception as e:
@@ -296,7 +317,7 @@ async def create_incident(incident: IncidentIn):
     if result is None:
         metrics.record_failure()
         store.save_incident({**{k: incident.get(k) for k in
-                                ("service", "environment", "alert_type", "description")},
+                                ("service", "namespace", "environment", "alert_type", "description")},
                              "id": incident["incident_id"], "status": "failed"})
         raise HTTPException(500, f"investigation failed twice: {last_error}")
 
@@ -342,24 +363,11 @@ async def approve_incident(incident_id: str, body: ApproveIn | None = None,
 
         tid = _get_thread(safe_id)
         if tid is None:
-            snap = store.load_snapshot(safe_id)
-            if snap is None:
-                raise HTTPException(404, "unknown incident")
-            incident = (snap.get("state") or {}).get("incident")
-            if not isinstance(incident, dict):
-                raise HTTPException(500, "snapshot corrupted: missing incident")
-            result, tid = await asyncio.to_thread(run_incident, incident,
-                                                  _new_thread_id(safe_id))
-            _set_thread(safe_id, tid)
-            if not is_paused(tid):
-                _persist(incident, tid, result)
-                return result
-            appr.mark_paused(safe_id, result.get("remediation_plan") or {})
-        else:
-            try:
-                incident = ops_mind_graph.get_state(_config(tid)).values.get("incident", {})
-            except Exception as e:
-                raise HTTPException(500, f"could not load incident state: {e}")
+            raise HTTPException(404, "unknown or expired paused incident")
+        try:
+            incident = ops_mind_graph.get_state(_config(tid)).values.get("incident", {})
+        except Exception as e:
+            raise HTTPException(500, f"could not load incident state: {e}")
 
         if not is_paused(tid):
             return ops_mind_graph.get_state(_config(tid)).values
@@ -367,7 +375,7 @@ async def approve_incident(incident_id: str, body: ApproveIn | None = None,
         expired, _meta = appr.is_expired(safe_id)
         if expired:
             store.save_incident({**{k: (incident or {}).get(k) for k in
-                                    ("service", "environment", "alert_type", "description")},
+                                    ("service", "namespace", "environment", "alert_type", "description")},
                                  "id": safe_id, "status": "expired"})
             store.save_approval(safe_id, approver, approver_source, "", idem_key, "expired")
             appr.clear_meta(safe_id)
@@ -401,15 +409,22 @@ async def approve_incident(incident_id: str, body: ApproveIn | None = None,
                 pass
         result["approved_by"] = approver
         result["approval_status"] = "approved"
+        note = ((body.note if body and body.note else "") or "").strip()[:1000]
+        if note:
+            ev = list(result.get("evidence", []) or [])
+            ev.append({"source": "human:guidance", "result": {"text": note}})
+            result["evidence"] = ev
         if (result.get("verification_result") or {}).get("healthy"):
             from app.agents.postmortem import write_postmortem
-            try:
-                pm = write_postmortem({**result, "incident": incident})
-            except Exception as e:
-                log.warning(f"postmortem failed: {e}")
-                pm = None
+            pm = write_postmortem({**result, "incident": incident})
             if pm:
                 result["postmortem"] = pm
+                from app.rag.feedback import ingest_postmortem
+                ingest_postmortem(
+                    (incident or {}).get("incident_id", safe_id), pm,
+                    outcome="healthy",
+                    fault_family=str(result.get("fault_family", "") or ""),
+                    action=str((result.get("remediation_plan") or {}).get("action", "")))
         store.save_approval(safe_id, approver, approver_source,
                             current_hash, idem_key, "approved")
         appr.clear_meta(safe_id)
@@ -421,7 +436,87 @@ async def approve_incident(incident_id: str, body: ApproveIn | None = None,
         return result
 
 
-# static dashboard mounted last
+@app.post("/incidents/{incident_id}/deny")
+async def deny_incident(incident_id: str, body: DenyIn | None = None,
+                        request: Request = None):
+    """Reject a paused fix. With a note (and no prior guidance round), the note
+    is fed back as trusted human guidance for exactly one more RCA round."""
+    import asyncio
+
+    from app.agents.graph import _config, ops_mind_graph
+    from app.api import approvals as appr
+
+    safe_id = re.sub(r"[^a-zA-Z0-9_\-]", "", incident_id)[:64]
+    if not safe_id:
+        raise HTTPException(404, "unknown incident")
+
+    headers = request.headers if request is not None else {}
+    header_denier = (headers.get("x-approver") or "").strip()[:64]
+    if header_denier:
+        denied_by, denier_source = header_denier, "header"
+    elif body and body.denied_by:
+        denied_by, denier_source = body.denied_by[:64], "body"
+    else:
+        denied_by, denier_source = "human", "default"
+    if appr.approver_required() and not header_denier:
+        raise HTTPException(401, "approver identity required (X-Approver header)")
+
+    with appr.approve_lock(safe_id):
+        tid = _get_thread(safe_id)
+        if tid is None or not is_paused(tid):
+            raise HTTPException(409, "nothing awaiting decision for this incident")
+        try:
+            state = ops_mind_graph.get_state(_config(tid)).values
+        except Exception as e:
+            raise HTTPException(500, f"could not load incident state: {e}")
+        incident = state.get("incident", {}) if isinstance(state, dict) else {}
+
+        expired, _meta = appr.is_expired(safe_id)
+        if expired:
+            store.save_incident({**{k: incident.get(k) for k in
+                                    ("service", "namespace", "environment", "alert_type", "description")},
+                                 "id": safe_id, "status": "expired"})
+            store.save_approval(safe_id, denied_by, denier_source, "", "", "expired")
+            appr.clear_meta(safe_id)
+            notify("approval-expired", incident or {"incident_id": safe_id},
+                   "approval window elapsed; re-investigate to propose a fresh plan")
+            raise HTTPException(410, "approval expired: re-investigate for a fresh plan")
+
+        note = ((body.note if body and body.note else "") or "").strip()[:1000]
+        reason = ((body.reason if body and body.reason else "") or "").strip()[:500]
+        rounds = incident.get("guidance_rounds", 0) if isinstance(incident, dict) else 0
+        if note and (rounds or 0) < 1:
+            guided = {**incident, "human_guidance": note,
+                      "guidance_rounds": (rounds or 0) + 1}
+            handler = get_trace_handler()
+            try:
+                result, new_tid = await asyncio.to_thread(
+                    run_incident, guided, f"{safe_id}-g{(rounds or 0) + 1}",
+                    [handler] if handler else None)
+            except Exception as e:
+                raise HTTPException(500, f"re-investigation failed: {e}")
+            _set_thread(safe_id, new_tid)
+            _persist(guided, new_tid, result)
+            notify("denied-rerun", guided, f"note from {denied_by}; re-investigated")
+            return {**result, "rerun": True}
+
+        result = dict(state) if isinstance(state, dict) else {}
+        if note:
+            ev = list(result.get("evidence", []) or [])
+            ev.append({"source": "human:guidance", "result": {"text": note}})
+            result["evidence"] = ev
+        result["approval_status"] = "denied"
+        result["denied_by"] = denied_by
+        result["deny_reason"] = reason
+        store.save_approval(safe_id, denied_by, denier_source, "", "", "denied")
+        appr.clear_meta(safe_id)
+        _persist(incident if isinstance(incident, dict) else {"incident_id": safe_id},
+                 tid, result)
+        notify("denied", incident or {"incident_id": safe_id},
+               f"fix rejected by {denied_by}" + (f": {reason}" if reason else ""))
+        return result
+
+
 _PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "public")
 app.mount("/", StaticFiles(directory=_PUBLIC_DIR, html=True), name="static")
 

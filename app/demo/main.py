@@ -5,8 +5,8 @@ POST /chaos/{mode}  (mode: ok | errors | slow)  -> flips the failure switch
 GET  /checkout      -> simulated checkout, fails fast when chaos=errors
 
 Every checkout emits a structured JSON log line (picked up by Promtail/Loki
-with a service label) and an OpenTelemetry span (exported OTLP to Jaeger when
-OTEL_EXPORTER_OTLP_ENDPOINT is set).
+with a service label). Cluster tracing (OpenTelemetry collector + Jaeger)
+is configured at the platform layer; the app exposes Prometheus metrics.
 """
 import json
 import logging
@@ -36,26 +36,6 @@ handler.setFormatter(logging.Formatter("%(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 logger.propagate = False
-
-_tracer = None
-try:
-    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-        trace.set_tracer_provider(TracerProvider())
-        trace.get_tracer_provider().add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(
-                endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), insecure=True)))
-        FastAPIInstrumentor.instrument_app(app)
-        _tracer = trace.get_tracer("demo-checkout")
-except Exception as e:
-    logger.info(json.dumps({"service": "demo-checkout", "msg": f"tracing disabled: {e}"}))
 
 
 def _log(status: str, latency_s: float):
@@ -88,11 +68,7 @@ def set_chaos(mode: str):
 
 @app.get("/checkout")
 def checkout():
-    start = time.time()
-    if _tracer is not None:
-        with _tracer.start_as_current_span("checkout", attributes={"chaos": MODE["chaos"]}):
-            return _do_checkout(start)
-    return _do_checkout(start)
+    return _do_checkout(time.time())
 
 
 def _do_checkout(start: float):

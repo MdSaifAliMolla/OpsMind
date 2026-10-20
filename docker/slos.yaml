@@ -1,0 +1,13 @@
+services:
+  demo-checkout:
+    availability: 0.999
+    latency_p95_ms: 800
+    fast_burn_error_ratio: 0.25
+    fast_burn_window: 2m
+    slow_burn_error_ratio: 0.10
+    slow_burn_window: 10m
+  opsmind-api:
+    availability: 0.995
+    agent_success_rate_floor: 0.70
+    eval_severity_floor: 0.70
+    eval_rca_floor: 0.60

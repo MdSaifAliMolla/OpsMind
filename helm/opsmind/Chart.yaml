@@ -5,12 +5,10 @@ type: application
 version: 0.2.0
 appVersion: "1.0.0"
 dependencies:
-  # Postgres for incidents + LangGraph checkpoints. Disable if you bring your own (e.g. RDS).
   - name: postgresql
     version: "15.5.8"
     repository: https://charts.bitnami.com/bitnami
     condition: postgresql.enabled
-  # Qdrant vector DB for runbook RAG. Disable if you use Qdrant Cloud.
   - name: qdrant
     version: "0.9.1"
     repository: https://qdrant.github.io/qdrant-helm

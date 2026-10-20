@@ -1,5 +1,4 @@
 import os
-import threading
 
 import requests
 
@@ -7,16 +6,23 @@ _session = requests.Session()
 _session.trust_env = False
 TIMEOUT = 2
 
-_lock = threading.Lock()
-_down = False
+
+def _base() -> str:
+    base = os.getenv("LOKI_URL", "").strip()
+    if not base:
+        raise RuntimeError("LOKI_URL is required (no empty fallback)")
+    return base
 
 
-def _query(base: str, logql: str):
-    r = _session.get(f"{base}/loki/api/v1/query_range",
-                     params={"query": logql, "limit": 20},
+def _query(base: str, logql: str, start: str = "", end: str = ""):
+    params = {"query": logql, "limit": 20}
+    if start:
+        params["start"] = start
+    if end:
+        params["end"] = end
+    r = _session.get(f"{base}/loki/api/v1/query_range", params=params,
                      timeout=TIMEOUT)
-    if not r.ok:
-        return []
+    r.raise_for_status()
     out = []
     for res in (r.json().get("data") or {}).get("result", []):
         for v in res.get("values", []):
@@ -28,29 +34,12 @@ def _query(base: str, logql: str):
 
 
 def search_logs(service: str, query: str, incident=None):
-    global _down
-    if incident and incident.get("logs"):
-        return [str(x)[:500] for x in incident["logs"][:20]]
-    with _lock:
-        if _down:
-            return []
-
-    base = os.getenv("LOKI_URL", "http://localhost:3100")
-    try:
-        safe_q = (query or "").replace('"', "")
-        candidates = [
-            f'{{service="{service}"}} |= "{safe_q}"' if safe_q else f'{{service="{service}"}}',
-            f'{{service=~".*{service}.*"}} |= "{safe_q}"' if safe_q else f'{{service=~".*{service}.*"}}',
-            f'{{service=~".+"}} |= "{safe_q}"' if safe_q else None,
-        ]
-        for logql in candidates:
-            if not logql:
-                continue
-            out = _query(base, logql)
-            if out:
-                return out
-        return []
-    except Exception:
-        with _lock:
-            _down = True
-    return []
+    base = _base()
+    window = ((incident or {}).get("alert_window") or {}) if isinstance(incident, dict) else {}
+    start, end = str(window.get("start", "")), str(window.get("end", ""))
+    safe_q = (query or "").replace('"', "")
+    logql = f'{{app="{service}"}} |= "{safe_q}"' if safe_q else f'{{app="{service}"}}'
+    out = _query(base, logql, start, end)
+    if not out:
+        raise RuntimeError(f"loki: no logs for service={service}")
+    return out

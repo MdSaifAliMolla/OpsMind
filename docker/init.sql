@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS incidents (
   id            TEXT PRIMARY KEY,
   service       TEXT NOT NULL,
+  namespace     TEXT NOT NULL DEFAULT 'default',
   environment   TEXT NOT NULL,
   alert_type    TEXT NOT NULL,
   description   TEXT,
@@ -58,7 +59,6 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
 
--- Phase 7: append-only approval audit (hash-chained per incident).
 CREATE TABLE IF NOT EXISTS approvals (
   id              SERIAL PRIMARY KEY,
   incident_id     TEXT REFERENCES incidents(id),

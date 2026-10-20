@@ -8,9 +8,8 @@ data/incidents/incident_*
 data/real/
 app/rag/store.json
 app/evaluation/results.json
+app/ml/artifacts/
 mlruns/
 mlartifacts/
 *.log
 .DS_Store
-# local-only interview prep notes, never commit
-architecture.md

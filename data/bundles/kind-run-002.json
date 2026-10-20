@@ -1,0 +1,301 @@
+{
+  "incident": {
+    "incident_id": "real_podkill_cart_002",
+    "service": "cartservice",
+    "namespace": "boutique",
+    "alert_type": "BoutiquePodCrashloop",
+    "description": "kind run: pod-kill storm on cartservice"
+  },
+  "evidence": [
+    {
+      "source": "get_deployment_history",
+      "args": {},
+      "result": {
+        "minutesAgo": 9999.0,
+        "version": "v-synthetic"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_usage"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.156817"
+      }
+    },
+    {
+      "source": "search_logs",
+      "args": {
+        "query": "error"
+      },
+      "result": []
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "error_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.157270"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "p95_latency_ms"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.157465"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_pct"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.157699"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "memory_pct"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.157897"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "db_connections"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.158080"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "redis_up"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-07T23:17:19.158254"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "pods_ready"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-07T23:17:19.158428"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "request_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:19.158612"
+      }
+    },
+    {
+      "source": "get_trace",
+      "args": {},
+      "result": []
+    },
+    {
+      "source": "pod_events",
+      "args": {
+        "service": "boutique"
+      },
+      "result": []
+    },
+    {
+      "source": "rag:kubernetes.md",
+      "text": "# Kubernetes runbook\n\n## Symptoms\n- Pods stuck in `CrashLoopBackOff` or `OOMKilled` right after a rollout.\n- `pods_ready` drops to 0, error rate spikes because there is nothing serving traffic.\n- Logs show panics (`nil pointer dereference`) for bad deploys, or `heap allocation failure` / `OOM killer invoked` for memory leaks.\n\n## Telling the two apart\n- Crashloop from a bad deploy: starts within minutes of a rollout, every new pod crashes the same way, old ReplicaSet was healthy.\n- Memory leak:",
+      "score": 0.22259734907900422
+    },
+    {
+      "source": "rag:kubernetes.md",
+      "text": "e way, old ReplicaSet was healthy.\n- Memory leak: slow burn over hours. `memory_pct` climbs steadily toward 90%+, restarts buy you a few hours then it comes back.\n\n## Bad deploy fix\nRollback. Don't try to patch forward during an outage.\n\n```\nkubectl rollout undo deployment/<service>\nkubectl rollout status deployment/<service>\n```\n\nCheck `kubectl get pods` until ready count recovers, then verify error rate drops.\n\n## Memory leak fix\nRestart is the safe immediate move. It buys time, it is low risk",
+      "score": 0.18414464577290676
+    },
+    {
+      "source": "rag:scaling.md",
+      "text": "# Scaling Runbook\n\nCovers: cpu_starvation, pod_kill_storm, traffic_spike, retry_storm_cascade.\n\n## Symptoms\n\n- CPU saturation or throttling with climbing latency; or ready-replica count\n  collapsed after pod kills while traffic is steady.\n- Retry storms: duplicate request ids, circuit breakers opening, queue depth\n  growing faster than workers drain it.\n\n## Confirm\n\n- Request rate per replica far above headroom (rule of thumb: scale so each\n  replica handles ~2000 rps).\n- Pod events show OOMKill",
+      "score": 0.1587797209096002
+    },
+    {
+      "source": "get_deployment_history",
+      "args": {},
+      "result": {
+        "minutesAgo": 9999.0,
+        "version": "v-synthetic"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_usage"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.425142"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "restart_count"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.425405"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "error_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.425612"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "p95_latency_ms"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.425827"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "cpu_pct"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.426018"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "memory_pct"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.426199"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "db_connections"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.426422"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "redis_up"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-07T23:17:23.426608"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "pods_ready"
+      },
+      "result": {
+        "value": 1.0,
+        "timestamp": "2026-10-07T23:17:23.426850"
+      }
+    },
+    {
+      "source": "query_metrics",
+      "args": {
+        "metric": "request_rate"
+      },
+      "result": {
+        "value": 0.0,
+        "timestamp": "2026-10-07T23:17:23.427074"
+      }
+    },
+    {
+      "source": "search_logs",
+      "args": {
+        "query": "boutiquepodcrashloop"
+      },
+      "result": []
+    },
+    {
+      "source": "get_trace",
+      "args": {},
+      "result": []
+    },
+    {
+      "source": "pod_events",
+      "args": {
+        "service": "boutique"
+      },
+      "result": []
+    },
+    {
+      "source": "rag:kubernetes.md",
+      "text": "# Kubernetes runbook\n\n## Symptoms\n- Pods stuck in `CrashLoopBackOff` or `OOMKilled` right after a rollout.\n- `pods_ready` drops to 0, error rate spikes because there is nothing serving traffic.\n- Logs show panics (`nil pointer dereference`) for bad deploys, or `heap allocation failure` / `OOM killer invoked` for memory leaks.\n\n## Telling the two apart\n- Crashloop from a bad deploy: starts within minutes of a rollout, every new pod crashes the same way, old ReplicaSet was healthy.\n- Memory leak:",
+      "score": 0.22259734907900422
+    },
+    {
+      "source": "rag:kubernetes.md",
+      "text": "e way, old ReplicaSet was healthy.\n- Memory leak: slow burn over hours. `memory_pct` climbs steadily toward 90%+, restarts buy you a few hours then it comes back.\n\n## Bad deploy fix\nRollback. Don't try to patch forward during an outage.\n\n```\nkubectl rollout undo deployment/<service>\nkubectl rollout status deployment/<service>\n```\n\nCheck `kubectl get pods` until ready count recovers, then verify error rate drops.\n\n## Memory leak fix\nRestart is the safe immediate move. It buys time, it is low risk",
+      "score": 0.18414464577290676
+    },
+    {
+      "source": "rag:scaling.md",
+      "text": "# Scaling Runbook\n\nCovers: cpu_starvation, pod_kill_storm, traffic_spike, retry_storm_cascade.\n\n## Symptoms\n\n- CPU saturation or throttling with climbing latency; or ready-replica count\n  collapsed after pod kills while traffic is steady.\n- Retry storms: duplicate request ids, circuit breakers opening, queue depth\n  growing faster than workers drain it.\n\n## Confirm\n\n- Request rate per replica far above headroom (rule of thumb: scale so each\n  replica handles ~2000 rps).\n- Pod events show OOMKill",
+      "score": 0.1587797209096002
+    }
+  ],
+  "label": {
+    "fault_family": "pod_kill_storm",
+    "service": "cartservice",
+    "fix": "scale replicas"
+  },
+  "outcome": {
+    "recovered": false,
+    "mttr_s": null
+  },
+  "run_id": "kind-run-002",
+  "agent": {
+    "severity": "P1",
+    "root_cause": "The boutique service pods are experiencing repeated OOM crashes causing a crash loop.",
+    "confidence": 0.8,
+    "predicted_action": "scale replicas"
+  }
+}

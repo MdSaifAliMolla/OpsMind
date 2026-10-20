@@ -16,6 +16,10 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: {{ include "opsmind.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
       containers:
         - name: api
@@ -32,8 +36,8 @@ spec:
             periodSeconds: 10
           envFrom:
             - configMapRef: { name: {{ include "opsmind.fullname" . }}-config }
-            - secretRef: { name: {{ include "opsmind.fullname" . }}-secrets, optional: true }
-            - secretRef: { name: opsmind-secrets, optional: true }
+            - secretRef: { name: {{ include "opsmind.fullname" . }}-secrets, optional: false }
+            - secretRef: { name: opsmind-secrets, optional: false }
           env:
             - name: DATABASE_URL
               value: "postgresql://opsmind:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgresql:5432/opsmind"

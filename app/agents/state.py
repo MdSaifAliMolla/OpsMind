@@ -8,6 +8,8 @@ from typing_extensions import TypedDict
 class IncidentState(TypedDict, total=False):
     incident: dict
     severity: str
+    severity_source: str
+    fault_family: str | None
     evidence: Annotated[list, operator.add]
     trace: Annotated[list, operator.add]
     hypotheses: list

@@ -1,0 +1,79 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: opsmind-metric-adapter
+  namespace: boutique
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: opsmind-adapter
+      interval: 30s
+      rules:
+        - record: error_rate
+          expr: |
+            max by (service) (
+              label_replace(
+                max_over_time(kube_deployment_status_replicas_unavailable{namespace="boutique"}[5m]),
+                "service", "$1", "deployment", "([a-z-]+)"
+              )
+            )
+        - record: pods_ready
+          expr: |
+            min by (service) (
+              label_replace(
+                kube_deployment_status_replicas_available{namespace="boutique"}
+                / clamp_min(kube_deployment_status_replicas{namespace="boutique"}, 1),
+                "service", "$1", "deployment", "([a-z-]+)"
+              )
+            )
+        - record: cpu_pct
+          expr: |
+            avg by (service) (
+              label_replace(
+                rate(container_cpu_usage_seconds_total{namespace="boutique",container!=""}[2m]) * 100,
+                "service", "$1", "pod", "([a-z-]+)-[a-z0-9]+-[a-z0-9]+"
+              )
+            )
+        - record: memory_pct
+          expr: |
+            avg by (service) (
+              label_replace(
+                container_memory_working_set_bytes{namespace="boutique",container!=""}
+                / on(pod, container) clamp_min(kube_pod_container_resource_limits{namespace="boutique",resource="memory"}, 1) * 100,
+                "service", "$1", "pod", "([a-z-]+)-[a-z0-9]+-[a-z0-9]+"
+              )
+            )
+        - record: request_rate
+          expr: |
+            sum by (service) (
+              label_replace(
+                rate(container_network_receive_packets_total{namespace="boutique"}[2m]),
+                "service", "$1", "pod", "([a-z-]+)-[a-z0-9]+-[a-z0-9]+"
+              )
+            )
+        - record: p95_latency_ms
+          expr: |
+            max by (service) (
+              label_replace(
+                histogram_quantile(0.95,
+                  sum by (le, pod) (
+                    rate(prober_probe_duration_seconds_bucket{namespace="boutique"}[5m])
+                  )
+                ) * 1000,
+                "service", "$1", "pod", "([a-z-]+)-[a-z0-9]+-[a-z0-9]+"
+              )
+            )
+        - record: redis_up
+          expr: |
+            scalar(min(kube_deployment_status_replicas_available{namespace="boutique",deployment="redis-cart"}) > 0)
+            * max by (service) (
+              label_replace(kube_deployment_status_replicas{namespace="boutique"}, "service", "$1", "deployment", "([a-z-]+)")
+              / label_replace(kube_deployment_status_replicas{namespace="boutique"}, "service", "$1", "deployment", "([a-z-]+)")
+            )
+        - record: db_connections
+          expr: |
+            0 * max by (service) (
+              label_replace(kube_deployment_status_replicas{namespace="boutique"}, "service", "$1", "deployment", "([a-z-]+)")
+              / label_replace(kube_deployment_status_replicas{namespace="boutique"}, "service", "$1", "deployment", "([a-z-]+)")
+            )
