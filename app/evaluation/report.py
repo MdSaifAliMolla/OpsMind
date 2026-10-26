@@ -95,12 +95,6 @@ def render(results_path: str) -> str:
                      "CI fails on +25% vs `docs/eval/cost_baseline.json`.")
     else:
         lines.append("No cost data (old harness) — re-run to populate; cost gate skips without it.")
-    lines += ["",
-              "## Ablation / providers / real data",
-              "",
-              "- Real telemetry: `py -m app.evaluation.run_real` — report-only, family-keyword "
-              "scoring; publish numbers with windowing limits attached.",
-              ""]
     return "\n".join(lines)
 
 
