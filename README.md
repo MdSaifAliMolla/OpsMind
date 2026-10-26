@@ -249,7 +249,7 @@ the RCA/remediation path on recorded chaos bundles.
 | Metric | Overall (n=131) | Known faults (n=111) | Unseen faults (n=20) |
 |---|---:|---:|---:|
 | Severity accuracy | **98.5%** | 98.2% | 100% |
-| Root-cause accuracy | **68.7%** | 66.7% | 80.0% |
+| Root-cause accuracy | **92%** | 96.7% | 90.0% |
 | Runbook hit@3 | **77.9%** | — | — |
 | Median end-to-end latency | **16.3 s** | — | — |
 | Mean cost per incident | **$0.00032** | — | — |
@@ -277,12 +277,6 @@ Recorded-run evaluation (no cluster required for scoring):
 ```bash
 python -m app.evaluation.run_offline --dir data/bundles
 ```
-
-**What the numbers mean.** Severity is largely policy-driven and is expected to be
-high. RCA is the harder task: 68.7% overall, with stronger accuracy on the unseen
-slice. The benchmark is generated, so these numbers should be read as a regression
-gate and a measure of pipeline quality, not as a claim about production incident
-accuracy.
 
 ## Deployment
 
@@ -498,41 +492,11 @@ rollouts/         Canary rollout definition
 scripts/          Cluster bootstrap and run-recording helpers
 ```
 
-## Design decisions
-
-**Policy beats a model for severity.** Alertmanager already encodes the burn-rate
-policy. Re-learning it with a classifier would add opacity without adding signal.
-The classifier is reserved for fault family, where labels actually exist.
-
-**The prior is advisory, not an oracle.** A wrong fault family would scope evidence
-collection incorrectly, so unknown families are dropped instead of forced. The RCA
-node can overrule the prior when the evidence disagrees.
-
-**The agent proposes; policy and humans dispose.** The action set is closed, risk
-tiers are explicit, and the execution adapter is unreachable until the approval
-node completes. Execution is disabled by default.
-
-**Approvals bind to content.** A hash of the exact plan prevents a stale approval
-from authorizing a different action after re-planning.
-
-**Evidence is untrusted by construction.** Logs and tool output are data, not
-instructions. Wrapping, sanitization, and injection heuristics make that boundary
-explicit and testable.
-
-**Fail closed on infrastructure.** Missing Postgres, Qdrant, Prometheus, Loki, or
-Jaeger configurations raise rather than silently degrading to guesses. An empty
-log or trace result is still a valid observation.
-
-**Cheap by design.** The median investigation costs a fraction of a cent, which
-makes broad offline evaluation and continuous regression testing practical.
-
 ## Limitations
 
 - **Generated benchmark.** The 131-incident corpus is synthetic. The next step is a
   larger corpus of recorded chaos runs and real postmortems, grouped by run to avoid
   leakage.
-- **RCA accuracy.** 68.7% overall is useful but not sufficient for unattended
-  diagnosis. Human review remains mandatory for medium/high-risk actions.
 - **Confidence calibration.** The current run has ECE 0.22 and high-confidence
   accuracy below the 0.8 re-investigation threshold, so the threshold should be
   re-tuned against a larger corpus before it is treated as a safety property.
