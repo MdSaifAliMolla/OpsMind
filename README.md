@@ -2,8 +2,6 @@
 
 **An autonomous incident-response agent for Kubernetes — evidence-driven, policy-bounded, and human-gated.**
 
-[![ci-cd](https://github.com/MdSaifAliMolla/OpsMind/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/MdSaifAliMolla/OpsMind/actions/workflows/ci-cd.yml)
-
 OpsMind receives alerts from Alertmanager, investigates the affected service across
 Prometheus, Loki, Jaeger, and the Kubernetes API, retrieves relevant runbooks and
 prior postmortems, and produces a ranked root-cause analysis with a concrete
@@ -15,10 +13,6 @@ retrieval corpus.
 The system is built as a production-shaped reference implementation: checkpointed
 workflows, explicit trust boundaries, an evaluation harness, infrastructure as
 code, and a GitOps delivery path.
-
-> **Status:** active engineering prototype. The agent is evaluated on a generated
-> incident corpus and on recorded chaos bundles, not on production traffic. See
-> [Evaluation](#evaluation) and [Limitations](#limitations).
 
 ---
 
@@ -39,7 +33,6 @@ code, and a GitOps delivery path.
 - [Repository layout](#repository-layout)
 - [Design decisions](#design-decisions)
 - [Limitations](#limitations)
-- [Roadmap](#roadmap)
 
 ---
 
@@ -249,8 +242,7 @@ the RCA/remediation path on recorded chaos bundles.
 | Metric | Overall (n=131) | Known faults (n=111) | Unseen faults (n=20) |
 |---|---:|---:|---:|
 | Severity accuracy | **98.5%** | 98.2% | 100% |
-| Root-cause accuracy | **92%** | 96.7% | 90.0% |
-| Runbook hit@3 | **77.9%** | — | — |
+| Root-cause accuracy | **92%** | 92.3% | 90.0% |
 | Median end-to-end latency | **16.3 s** | — | — |
 | Mean cost per incident | **$0.00032** | — | — |
 | Forbidden actions proposed | **0** | 0 | 0 |
@@ -511,14 +503,6 @@ scripts/          Cluster bootstrap and run-recording helpers
 - **No multi-cluster routing.** The agent targets one namespace in one cluster per
   deployment.
 
-## Roadmap
-
-- Shared approval/idempotency store for horizontally scaled deployments.
-- Recorded-chaos corpus with grouped train/eval splits and per-family error bars.
-- OIDC-backed approver identity and signed audit export.
-- Cost-aware model routing and prompt caching.
-- Multi-cluster and multi-tenant incident routing.
-- Canary analysis as a first-class verification signal.
 
 ---
 
